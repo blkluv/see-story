@@ -341,45 +341,79 @@ Format your response as a JSON object with this structure:
 Make sure the JSON is properly formatted and valid.
 `;
 
-    const result = await model.generateContent(prompt);
+    // Define the structured response schema for story generation
+    const storySchema = {
+      type: "object",
+      properties: {
+        scenes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              sceneNumber: { type: "integer" },
+              title: { type: "string" },
+              content: { type: "string" }
+            },
+            required: ["sceneNumber", "title", "content"],
+            propertyOrdering: ["sceneNumber", "title", "content"]
+          }
+        },
+        summary: { type: "string" }
+      },
+      required: ["scenes", "summary"],
+      propertyOrdering: ["scenes", "summary"]
+    };
+
+    const result = await model.generateContent([prompt], {
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: storySchema
+      }
+    });
+    
     const response = await result.response;
     const text = response.text();
     
-    console.log('✅ Story generated successfully');
+    console.log('✅ Story generated successfully with structured output');
     
-    // Try to parse the JSON response
+    // Parse the JSON response with fallback for markdown-wrapped responses
+    let generatedStory;
     try {
-      // Clean the response text to extract JSON
-      let jsonText = text.trim();
-      
-      // Remove markdown code blocks if present
-      jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-      
-      const generatedStory = JSON.parse(jsonText);
-      
-      // Validate the structure
-      if (generatedStory.scenes && Array.isArray(generatedStory.scenes)) {
-        console.log(`📖 Generated story with ${generatedStory.scenes.length} scenes`);
-        return generatedStory;
-      } else {
-        throw new Error('Invalid story structure returned by AI');
-      }
+      // Try direct JSON parse first (for proper structured output)
+      generatedStory = JSON.parse(text);
     } catch (parseError) {
-      console.error('❌ Error parsing AI response as JSON:', parseError.message);
-      console.log('Raw AI response:', text);
+      // Fallback: clean markdown code blocks if present
+      console.log('🔧 Attempting to clean markdown-wrapped JSON...');
+      let cleanedText = text.trim();
       
-      // Fallback: create a simple story structure
-      return {
-        scenes: [
-          {
-            sceneNumber: 1,
-            title: "Generated Story",
-            content: text.substring(0, Math.min(text.length, 1000)) + "..."
-          }
-        ],
-        summary: "AI-generated story based on user outline",
-        error: "Could not parse structured response from AI"
-      };
+      // Remove markdown code blocks
+      cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+      
+      // Try parsing the cleaned text
+      try {
+        generatedStory = JSON.parse(cleanedText);
+        console.log('✅ Successfully parsed cleaned JSON');
+      } catch (secondParseError) {
+        console.error('❌ Failed to parse even after cleaning:', secondParseError.message);
+        console.log('Raw response (first 200 chars):', text.substring(0, 200) + '...');
+        throw new Error(`JSON parsing failed: ${secondParseError.message}`);
+      }
+    }
+    
+    // Validate and log the structure
+    if (generatedStory.scenes && Array.isArray(generatedStory.scenes) && generatedStory.scenes.length > 0) {
+      console.log(`📖 Generated story with ${generatedStory.scenes.length} scenes`);
+      
+      // Log scene details for debugging
+      generatedStory.scenes.forEach((scene, index) => {
+        const contentLength = scene.content ? scene.content.length : 0;
+        const isValid = scene.content && scene.content.trim().length > 10;
+        console.log(`   Scene ${index + 1}: "${scene.title}" (${contentLength} chars) ${isValid ? '✅' : '❌ EMPTY'}`);
+      });
+      
+      return generatedStory;
+    } else {
+      throw new Error('Invalid story structure returned by AI');
     }
   } catch (error) {
     console.error('❌ Error generating story with Gemini:', error.message);
@@ -532,45 +566,92 @@ Respond with a JSON object in this exact format:
 Make sure positions are accurate and JSON is properly formatted.
 `;
 
-    const result = await model.generateContent(prompt);
+    // Define the structured response schema for entity extraction
+    const entitySchema = {
+      type: "object",
+      properties: {
+        entities: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              text: { type: "string" },
+              category: { 
+                type: "string",
+                enum: ["CHARACTERS", "LOCATIONS", "OBJECTS", "ACTIONS", "EMOTIONS", "CONCEPTS"]
+              },
+              startPos: { type: "integer" },
+              endPos: { type: "integer" },
+              description: { type: "string" }
+            },
+            required: ["text", "category", "startPos", "endPos", "description"],
+            propertyOrdering: ["text", "category", "startPos", "endPos", "description"]
+          }
+        },
+        totalEntities: { type: "integer" },
+        sceneLength: { type: "integer" }
+      },
+      required: ["entities", "totalEntities", "sceneLength"],
+      propertyOrdering: ["entities", "totalEntities", "sceneLength"]
+    };
+
+    const result = await model.generateContent([prompt], {
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: entitySchema
+      }
+    });
+    
     const response = await result.response;
     const text = response.text();
     
-    console.log('✅ Entity extraction completed');
+    console.log('✅ Entity extraction completed with structured output');
     
-    // Try to parse the JSON response
+    // Parse the JSON response with fallback for markdown-wrapped responses
+    let entityData;
     try {
-      // Clean the response text to extract JSON
-      let jsonText = text.trim();
-      
-      // Remove markdown code blocks if present
-      jsonText = jsonText.replace(/```json\n?/g, '').replace(/```\n?/g, '');
-      
-      const entityData = JSON.parse(jsonText);
-      
-      // Validate and enhance the structure
-      if (entityData.entities && Array.isArray(entityData.entities)) {
-        // Add scene length and total count
-        entityData.sceneLength = sceneContent.length;
-        entityData.totalEntities = entityData.entities.length;
-        
-        console.log(`📊 Extracted ${entityData.totalEntities} entities from scene`);
-        return entityData;
-      } else {
-        throw new Error('Invalid entity structure returned by AI');
-      }
+      // Try direct JSON parse first (for proper structured output)
+      entityData = JSON.parse(text);
     } catch (parseError) {
-      console.error('❌ Error parsing entity extraction response:', parseError.message);
-      console.log('Raw AI response:', text.substring(0, 200) + '...');
+      // Fallback: clean markdown code blocks if present
+      console.log('🔧 Attempting to clean markdown-wrapped JSON...');
+      let cleanedText = text.trim();
       
-      // Fallback: create basic entity structure
-      return {
-        entities: [],
-        totalEntities: 0,
-        sceneLength: sceneContent.length,
-        error: "Could not parse structured response from AI",
-        rawResponse: text.substring(0, 500) // Store partial response for debugging
-      };
+      // Remove markdown code blocks
+      cleanedText = cleanedText.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+      
+      // Try parsing the cleaned text
+      try {
+        entityData = JSON.parse(cleanedText);
+        console.log('✅ Successfully parsed cleaned JSON');
+      } catch (secondParseError) {
+        console.error('❌ Failed to parse even after cleaning:', secondParseError.message);
+        console.log('Raw response (first 200 chars):', text.substring(0, 200) + '...');
+        throw new Error(`JSON parsing failed: ${secondParseError.message}`);
+      }
+    }
+    
+    // Validate and enhance the structure
+    if (entityData.entities && Array.isArray(entityData.entities)) {
+      // Ensure scene length is set correctly
+      entityData.sceneLength = sceneContent.length;
+      entityData.totalEntities = entityData.entities.length;
+      
+      console.log(`📊 Extracted ${entityData.totalEntities} entities from scene "${sceneTitle}"`);
+      
+      // Log entity breakdown for debugging
+      const entityCounts = entityData.entities.reduce((acc, entity) => {
+        acc[entity.category] = (acc[entity.category] || 0) + 1;
+        return acc;
+      }, {});
+      
+      Object.entries(entityCounts).forEach(([category, count]) => {
+        console.log(`   ${category}: ${count} entities`);
+      });
+      
+      return entityData;
+    } else {
+      throw new Error('Invalid entity structure returned by AI');
     }
   } catch (error) {
     console.error('❌ Error extracting entities:', error.message);
@@ -581,6 +662,258 @@ Make sure positions are accurate and JSON is properly formatted.
       error: error.message
     };
   }
+};
+
+// Story validation and analysis functions
+const validateStoryCompleteness = (story) => {
+  const validation = {
+    hasScenes: false,
+    hasValidScenes: false,
+    hasEntities: false,
+    hasImages: false,
+    emptyScenes: [],
+    entityErrors: [],
+    imageErrors: [],
+    totalScenes: 0,
+    validScenes: 0,
+    totalEntities: 0,
+    totalImages: 0
+  };
+
+  if (!story.generatedStory) {
+    console.log('📋 Story validation: No generatedStory found');
+    return validation;
+  }
+
+  const generatedStory = story.generatedStory;
+  
+  // Check scenes
+  if (generatedStory.scenes && Array.isArray(generatedStory.scenes)) {
+    validation.hasScenes = true;
+    validation.totalScenes = generatedStory.scenes.length;
+    
+    generatedStory.scenes.forEach((scene, index) => {
+      if (!scene.content || scene.content.trim().length < 10) {
+        validation.emptyScenes.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title || `Scene ${index + 1}`,
+          issue: 'Empty or too short content'
+        });
+      } else {
+        validation.validScenes++;
+      }
+      
+      // Check entities for this scene
+      if (!scene.entities) {
+        // Scene is missing entities entirely
+        validation.entityErrors.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title,
+          error: 'Missing entities key - needs entity extraction'
+        });
+      } else if (scene.entities.error) {
+        // Scene has entities but with an error
+        validation.entityErrors.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title,
+          error: scene.entities.error
+        });
+      } else if (!scene.entities.entities || !Array.isArray(scene.entities.entities) || scene.entities.entities.length === 0) {
+        // Scene has entities object but no actual entities array or it's empty
+        validation.entityErrors.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title,
+          error: 'Empty or invalid entities array - needs entity extraction'
+        });
+      } else {
+        // Scene has valid entities
+        validation.totalEntities += scene.entities.entities.length;
+      }
+      
+      // Check images for this scene
+      if (!scene.images) {
+        // Scene is missing images entirely
+        validation.imageErrors.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title,
+          errors: ['Missing images key - needs image generation']
+        });
+      } else if (!Array.isArray(scene.images) || scene.images.length === 0) {
+        // Scene has images key but no actual images array or it's empty
+        validation.imageErrors.push({
+          sceneNumber: scene.sceneNumber || index + 1,
+          title: scene.title,
+          errors: ['Empty or invalid images array - needs image generation']
+        });
+      } else {
+        // Scene has images array, check for valid vs error images
+        const validImages = scene.images.filter(img => !img.error);
+        const errorImages = scene.images.filter(img => img.error);
+        
+        validation.totalImages += validImages.length;
+        
+        if (errorImages.length > 0) {
+          validation.imageErrors.push({
+            sceneNumber: scene.sceneNumber || index + 1,
+            title: scene.title,
+            errors: errorImages.map(img => img.error || 'Unknown image error')
+          });
+        }
+      }
+    });
+    
+    validation.hasValidScenes = validation.validScenes > 0;
+    validation.hasEntities = validation.totalEntities > 0;
+    validation.hasImages = validation.totalImages > 0;
+  }
+
+  // Log validation results
+  console.log(`📋 Story validation results:`);
+  console.log(`   ✅ Scenes: ${validation.validScenes}/${validation.totalScenes} valid`);
+  console.log(`   📊 Entities: ${validation.totalEntities} total`);
+  console.log(`   🖼️ Images: ${validation.totalImages} total`);
+  
+  if (validation.emptyScenes.length > 0) {
+    console.log(`   ❌ Empty scenes: ${validation.emptyScenes.length}`);
+  }
+  if (validation.entityErrors.length > 0) {
+    console.log(`   ❌ Entity errors: ${validation.entityErrors.length}`);
+  }
+  if (validation.imageErrors.length > 0) {
+    console.log(`   ❌ Image errors: ${validation.imageErrors.length}`);
+  }
+
+  return validation;
+};
+
+const regenerateFailedScenes = async (story, validation, characters, storyOutline) => {
+  console.log('🔧 Regenerating failed scenes...');
+  
+  if (validation.emptyScenes.length === 0) {
+    console.log('   No empty scenes to regenerate');
+    return story.generatedStory;
+  }
+
+  // For now, if we have empty scenes, regenerate the entire story
+  // In the future, we could implement scene-by-scene regeneration
+  console.log(`   🔄 Regenerating entire story due to ${validation.emptyScenes.length} empty scenes`);
+  
+  return await generateStoryWithGemini(characters, storyOutline);
+};
+
+const regenerateFailedEntities = async (story, validation, characters) => {
+  console.log('🔧 Regenerating failed entities...');
+  
+  if (validation.entityErrors.length === 0 && validation.totalEntities > 0) {
+    console.log('   No entity errors to fix');
+    return story.generatedStory;
+  }
+
+  const characterNames = characters.map(char => char.name);
+  let updatedStory = { ...story.generatedStory };
+  
+  // Regenerate entities for scenes that have errors or no entities
+  const scenesToProcess = updatedStory.scenes.filter((scene, index) => {
+    return !scene.entities || 
+           scene.entities.error || 
+           !scene.entities.entities || 
+           scene.entities.entities.length === 0;
+  });
+  
+  if (scenesToProcess.length > 0) {
+    console.log(`   🔄 Regenerating entities for ${scenesToProcess.length} scenes`);
+    
+    for (const scene of scenesToProcess) {
+      try {
+        console.log(`   Processing entities for scene: "${scene.title}"`);
+        const entityData = await extractEntitiesFromScene(
+          scene.content, 
+          scene.title, 
+          characterNames
+        );
+        
+        // Update the scene with new entity data
+        const sceneIndex = updatedStory.scenes.findIndex(s => s.sceneNumber === scene.sceneNumber);
+        if (sceneIndex !== -1) {
+          updatedStory.scenes[sceneIndex].entities = entityData;
+        }
+      } catch (error) {
+        console.error(`   ❌ Failed to regenerate entities for scene "${scene.title}":`, error.message);
+      }
+    }
+    
+    // Update entity metadata
+    const totalEntities = updatedStory.scenes.reduce((total, scene) => 
+      total + (scene.entities?.totalEntities || 0), 0);
+    
+    updatedStory.entityMetadata = {
+      totalEntitiesAcrossScenes: totalEntities,
+      scenesProcessed: updatedStory.scenes.length,
+      entitiesPerScene: updatedStory.scenes.map(scene => ({
+        sceneNumber: scene.sceneNumber,
+        title: scene.title,
+        entityCount: scene.entities?.totalEntities || 0
+      }))
+    };
+  }
+
+  return updatedStory;
+};
+
+const regenerateFailedImages = async (story, validation, characters) => {
+  console.log('🔧 Regenerating failed images...');
+  
+  if (validation.imageErrors.length === 0 && validation.totalImages > 0) {
+    console.log('   No image errors to fix');
+    return story.generatedStory;
+  }
+
+  let updatedStory = { ...story.generatedStory };
+  
+  // Regenerate images for scenes that have errors or no images
+  const scenesToProcess = updatedStory.scenes.filter(scene => {
+    return !scene.images || 
+           scene.images.length === 0 || 
+           scene.images.every(img => img.error);
+  });
+  
+  if (scenesToProcess.length > 0) {
+    console.log(`   🔄 Regenerating images for ${scenesToProcess.length} scenes`);
+    
+    for (const scene of scenesToProcess) {
+      try {
+        console.log(`   Processing images for scene: "${scene.title}"`);
+        const sceneImages = await generateSceneImages(scene.content, scene.title, characters);
+        
+        // Update the scene with new image data
+        const sceneIndex = updatedStory.scenes.findIndex(s => s.sceneNumber === scene.sceneNumber);
+        if (sceneIndex !== -1) {
+          updatedStory.scenes[sceneIndex].images = sceneImages;
+        }
+      } catch (error) {
+        console.error(`   ❌ Failed to regenerate images for scene "${scene.title}":`, error.message);
+      }
+    }
+    
+    // Update image metadata
+    const totalSuccessfulImages = updatedStory.scenes.reduce((total, scene) => 
+      total + (scene.images?.filter(img => !img.error).length || 0), 0);
+    
+    updatedStory.imageMetadata = {
+      totalImagesGenerated: totalSuccessfulImages,
+      totalImageAttempts: updatedStory.scenes.reduce((total, scene) => 
+        total + (scene.images?.length || 0), 0),
+      scenesProcessed: updatedStory.scenes.length,
+      imagesPerScene: updatedStory.scenes.map(scene => ({
+        sceneNumber: scene.sceneNumber,
+        title: scene.title,
+        successfulImages: scene.images?.filter(img => !img.error).length || 0,
+        failedImages: scene.images?.filter(img => img.error).length || 0
+      }))
+    };
+  }
+
+  return updatedStory;
 };
 
 // Separate generation functions for modular processing
@@ -904,55 +1237,55 @@ const processStoryGranularly = async (storyData, filepath) => {
   }
 };
 
-// Wrapper for granular processing that returns whether changes were made
+// Enhanced granular processing with validation and smart regeneration
 const processStoryGranularlyWithCheck = async (storyData, filepath) => {
   try {
     const characters = storyData.characters || [];
     const storyOutline = storyData.story?.outline || 'A mysterious adventure begins...';
-    const characterNames = characters.map(char => char.name);
+    const storyName = characters.map(char => char.name).join(' & ') || 'Unnamed Story';
     
-    let currentGeneratedStory = storyData.generatedStory || {};
+    console.log(`🔍 Processing story: "${storyName}"`);
+    
+    // First, validate the current state of the story
+    const validation = validateStoryCompleteness(storyData);
+    
+    let currentGeneratedStory = { ...storyData.generatedStory } || {};
     let hasChanges = false;
     
-    // Check and generate scenes if missing
-    const hasScenes = currentGeneratedStory.scenes && 
-                     currentGeneratedStory.scenes.length > 0;
-    
-    if (!hasScenes) {
-      console.log('📝 Missing scenes - generating...');
-      const newStory = await generateScenesOnly(characters, storyOutline);
-      currentGeneratedStory = {
-        ...currentGeneratedStory,
-        ...newStory
-      };
+    // Step 1: Handle scenes (generate if missing or regenerate if empty)
+    if (!validation.hasScenes) {
+      console.log('📝 No scenes found - generating complete story...');
+      currentGeneratedStory = await generateScenesOnly(characters, storyOutline);
       hasChanges = true;
-      console.log('✅ Scenes generated successfully');
+      console.log('✅ Complete story generated');
+    } else if (validation.emptyScenes.length > 0) {
+      console.log(`📝 Found ${validation.emptyScenes.length} empty/invalid scenes - regenerating...`);
+      currentGeneratedStory = await regenerateFailedScenes({
+        ...storyData,
+        generatedStory: currentGeneratedStory
+      }, validation, characters, storyOutline);
+      hasChanges = true;
     } else {
-      console.log('✅ Scenes already exist');
+      console.log(`✅ All ${validation.totalScenes} scenes are valid`);
     }
     
-    // Check and extract entities if missing
+    // Step 2: Handle entities (extract if missing or fix errors)
     if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
-      const hasEntities = currentGeneratedStory.scenes.some(scene => 
-        scene.entities && scene.entities.totalEntities > 0
-      );
-      
-      if (!hasEntities) {
-        console.log('🔍 Missing entities - extracting...');
+      if (validation.totalEntities === 0) {
+        console.log('🔍 No entities found - extracting for all scenes...');
         const scenesWithEntities = await generateEntitiesOnly(
           currentGeneratedStory.scenes,
-          characterNames
+          characters.map(char => char.name)
         );
-        
-        // Update scenes with entities
         currentGeneratedStory.scenes = scenesWithEntities;
+        hasChanges = true;
         
         // Update entity metadata
-        const totalSceneEntities = scenesWithEntities.reduce((total, scene) => 
+        const totalEntities = scenesWithEntities.reduce((total, scene) => 
           total + (scene.entities?.totalEntities || 0), 0);
         
         currentGeneratedStory.entityMetadata = {
-          totalEntitiesAcrossScenes: totalSceneEntities,
+          totalEntitiesAcrossScenes: totalEntities,
           scenesProcessed: scenesWithEntities.length,
           entitiesPerScene: scenesWithEntities.map(scene => ({
             sceneNumber: scene.sceneNumber,
@@ -961,28 +1294,29 @@ const processStoryGranularlyWithCheck = async (storyData, filepath) => {
           }))
         };
         
+        console.log(`✅ Extracted entities for all scenes (${totalEntities} total)`);
+      } else if (validation.entityErrors.length > 0) {
+        console.log(`🔧 Found ${validation.entityErrors.length} entity errors - fixing...`);
+        currentGeneratedStory = await regenerateFailedEntities({
+          ...storyData,
+          generatedStory: currentGeneratedStory
+        }, validation, characters);
         hasChanges = true;
-        console.log('✅ Entities extracted successfully');
       } else {
-        console.log('✅ Entities already exist');
+        console.log(`✅ All scenes have valid entities (${validation.totalEntities} total)`);
       }
     }
     
-    // Check and generate images if missing
+    // Step 3: Handle images (generate if missing or fix errors)
     if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
-      const hasImages = currentGeneratedStory.scenes.some(scene => 
-        scene.images && scene.images.length > 0 && scene.images.some(img => !img.error)
-      );
-      
-      if (!hasImages) {
-        console.log('🎨 Missing images - generating...');
+      if (validation.totalImages === 0) {
+        console.log('🎨 No images found - generating for all scenes...');
         const scenesWithImages = await generateImagesOnly(
           currentGeneratedStory.scenes,
           characters
         );
-        
-        // Update scenes with images
         currentGeneratedStory.scenes = scenesWithImages;
+        hasChanges = true;
         
         // Update image metadata
         const totalSuccessfulImages = scenesWithImages.reduce((total, scene) => 
@@ -1001,12 +1335,26 @@ const processStoryGranularlyWithCheck = async (storyData, filepath) => {
           }))
         };
         
+        console.log(`✅ Generated images for all scenes (${totalSuccessfulImages} total)`);
+      } else if (validation.imageErrors.length > 0) {
+        console.log(`🔧 Found ${validation.imageErrors.length} image errors - fixing...`);
+        currentGeneratedStory = await regenerateFailedImages({
+          ...storyData,
+          generatedStory: currentGeneratedStory
+        }, validation, characters);
         hasChanges = true;
-        console.log('✅ Images generated successfully');
       } else {
-        console.log('✅ Images already exist');
+        console.log(`✅ All scenes have valid images (${validation.totalImages} total)`);
       }
     }
+    
+    // Final validation to check if story is now playable
+    const finalValidation = validateStoryCompleteness({ ...storyData, generatedStory: currentGeneratedStory });
+    const isPlayable = finalValidation.hasValidScenes && 
+                       finalValidation.hasEntities && 
+                       finalValidation.hasImages;
+    
+    console.log(`🎯 Story "${storyName}" is ${isPlayable ? '✅ PLAYABLE' : '❌ NOT PLAYABLE'}`);
     
     // Update the file if there were any changes
     if (hasChanges) {
@@ -1014,13 +1362,13 @@ const processStoryGranularlyWithCheck = async (storyData, filepath) => {
       await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
       console.log('✅ Story file updated successfully');
     } else {
-      console.log('✅ All content already exists, no updates needed');
+      console.log('✅ All content already complete, no updates needed');
     }
     
-    return hasChanges; // Return whether any changes were made
+    return hasChanges;
     
   } catch (error) {
-    console.error('❌ Error in granular story processing with check:', error.message);
+    console.error('❌ Error in enhanced granular story processing:', error.message);
     return false;
   }
 };
@@ -1066,7 +1414,7 @@ const setupStoryWatcher = () => {
   return watcher;
 };
 
-// Function to process existing stories on startup
+// Enhanced startup processing with detailed logging
 const processExistingStories = async () => {
   console.log('🔍 Checking existing stories for missing generated content...');
   
@@ -1078,43 +1426,108 @@ const processExistingStories = async () => {
       return;
     }
     
-    console.log(`📚 Found ${stories.length} existing stories, checking for generated content...`);
+    // Quick analysis of all stories first
+    const storyAnalysis = stories.map(story => {
+      const storyName = story.characters?.map(c => c.name).join(' & ') || 'Untitled Story';
+      const validation = validateStoryCompleteness(story);
+      return {
+        name: storyName,
+        validation,
+        story,
+        needsProcessing: !validation.hasValidScenes || 
+                        !validation.hasEntities || 
+                        !validation.hasImages ||
+                        validation.emptyScenes.length > 0 ||
+                        validation.entityErrors.length > 0 ||
+                        validation.imageErrors.length > 0
+      };
+    });
+    
+    const needsProcessing = storyAnalysis.filter(s => s.needsProcessing);
+    const alreadyComplete = storyAnalysis.filter(s => !s.needsProcessing);
+    
+    console.log(`📚 Story Analysis Summary:`);
+    console.log(`   ✅ Complete & playable: ${alreadyComplete.length} stories`);
+    console.log(`   🔄 Need processing: ${needsProcessing.length} stories`);
+    
+    if (alreadyComplete.length > 0) {
+      console.log(`   Complete stories: ${alreadyComplete.map(s => s.name).join(', ')}`);
+    }
+    
+    if (needsProcessing.length === 0) {
+      console.log('✨ All existing stories are complete and playable!');
+      return;
+    }
+    
+    console.log(`\n🔄 Processing ${needsProcessing.length} incomplete stories...`);
     
     let processedCount = 0;
+    let successfullyCompleted = 0;
     
-    for (const story of stories) {
-      const storyName = story.characters?.map(c => c.name).join(' & ') || 'Untitled Story';
-      console.log(`🔍 Checking story: "${storyName}"`);
+    for (const storyInfo of needsProcessing) {
+      const { name: storyName, story, validation } = storyInfo;
+      
+      console.log(`\n📖 Processing: "${storyName}"`);
+      console.log(`   Missing - Scenes: ${!validation.hasValidScenes}, Entities: ${!validation.hasEntities}, Images: ${!validation.hasImages}`);
+      
+      if (validation.emptyScenes.length > 0) {
+        console.log(`   🚨 ${validation.emptyScenes.length} empty scenes need regeneration`);
+      }
+      if (validation.entityErrors.length > 0) {
+        console.log(`   🚨 ${validation.entityErrors.length} entity errors need fixing`);
+      }
+      if (validation.imageErrors.length > 0) {
+        console.log(`   🚨 ${validation.imageErrors.length} image errors need fixing`);
+      }
       
       try {
         // Find the original file path
         const filename = story.metadata?.filename;
         if (!filename) {
-          console.log('⚠️  Could not find filename for story, skipping...');
+          console.log('   ⚠️ Could not find filename, skipping...');
           continue;
         }
         
         const filepath = path.join(storiesDir, filename);
         
-        // Use granular processing to only generate what's missing
+        // Use enhanced granular processing
         const hadChanges = await processStoryGranularlyWithCheck(story, filepath);
         if (hadChanges) {
           processedCount++;
+          
+          // Check if story is now complete
+          const updatedStory = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+          const finalValidation = validateStoryCompleteness(updatedStory);
+          const isNowPlayable = finalValidation.hasValidScenes && 
+                               finalValidation.hasEntities && 
+                               finalValidation.hasImages;
+          
+          if (isNowPlayable) {
+            successfullyCompleted++;
+            console.log(`   🎉 "${storyName}" is now complete and playable!`);
+          } else {
+            console.log(`   ⚠️ "${storyName}" still has issues after processing`);
+          }
+        } else {
+          console.log(`   ✅ "${storyName}" was already complete`);
         }
         
       } catch (error) {
-        console.error(`❌ Error processing existing story "${storyName}":`, error.message);
+        console.error(`   ❌ Error processing "${storyName}":`, error.message);
       }
     }
     
-    if (processedCount > 0) {
-      console.log(`🎉 Successfully generated content for ${processedCount} existing stories`);
-    } else {
-      console.log('✨ All existing stories already have generated content');
+    console.log(`\n🏁 Processing Summary:`);
+    console.log(`   🔄 Stories processed: ${processedCount}`);
+    console.log(`   ✅ Now playable: ${successfullyCompleted}`);
+    console.log(`   📊 Total playable stories: ${alreadyComplete.length + successfullyCompleted}/${stories.length}`);
+    
+    if (successfullyCompleted > 0) {
+      console.log(`🎉 Successfully completed ${successfullyCompleted} stories that are now ready to play!`);
     }
     
   } catch (error) {
-    console.error('❌ Error checking existing stories:', error.message);
+    console.error('❌ Error in startup story processing:', error.message);
   }
 };
 
