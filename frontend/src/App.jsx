@@ -3,6 +3,7 @@ import Header from './components/Header';
 import FeaturedSection from './components/FeaturedSection';
 import CategoriesSection from './components/CategoriesSection';
 import CreateStoryForm from './components/CreateStoryForm';
+import StoryPlayer from './components/StoryPlayer';
 import './App.css';
 
 function App() {
@@ -10,10 +11,14 @@ function App() {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [currentView, setCurrentView] = useState('home'); // 'home' or 'create'
+  const [currentView, setCurrentView] = useState('home'); // 'home', 'create', or 'player'
+  const [selectedStory, setSelectedStory] = useState(null);
 
-  const handleNavigation = (view) => {
+  const handleNavigation = (view, storyData = null) => {
     setCurrentView(view);
+    if (storyData) {
+      setSelectedStory(storyData);
+    }
     // Scroll to top when changing views
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -58,6 +63,10 @@ function App() {
       return <CreateStoryForm />;
     }
 
+    if (currentView === 'player' && selectedStory) {
+      return <StoryPlayer story={selectedStory} onBack={() => handleNavigation('home')} />;
+    }
+
     // Home view
     if (loading) {
       return <div className="loading">Loading your stories...</div>;
@@ -69,8 +78,8 @@ function App() {
 
     return (
       <>
-        <FeaturedSection items={featuredItems} />
-        <CategoriesSection categories={categories} />
+        <FeaturedSection items={featuredItems} onPlayStory={handleNavigation} />
+        <CategoriesSection categories={categories} onPlayStory={handleNavigation} />
       </>
     );
   };

@@ -8,6 +8,7 @@ const https = require('https');
 const http = require('http');
 const chokidar = require('chokidar');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleGenAI } = require('@google/genai');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -298,6 +299,11 @@ const saveStoryToFile = async (story) => {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'your-gemini-api-key-here');
 const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
+// Initialize Gemini AI for Image Generation (Nano Banana)
+const genAIImage = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY || 'your-gemini-api-key-here'
+});
+
 // Story generation function
 const generateStoryWithGemini = async (characters, storyOutline) => {
   try {
@@ -388,6 +394,96 @@ Make sure the JSON is properly formatted and valid.
       summary: "Story generation failed",
       error: error.message
     };
+  }
+};
+
+// Image generation functions using Nano Banana
+const generateImagePromptFromScene = (sceneContent, sceneTitle, characters = []) => {
+  const characterNames = characters.map(c => c.name).join(', ');
+  
+  // Create two different visual perspectives for each scene
+  const prompts = [
+    {
+      type: 'wide_shot',
+      prompt: `Create a cinematic wide shot for a story scene titled "${sceneTitle}". 
+Scene content: ${sceneContent}
+${characterNames ? `Characters involved: ${characterNames}` : ''}
+Style: Dramatic, cinematic lighting, high quality, detailed environment, movie scene composition.
+Focus on establishing the setting and overall atmosphere of the scene.`
+    },
+    {
+      type: 'character_focus',
+      prompt: `Create a character-focused cinematic shot for a story scene titled "${sceneTitle}".
+Scene content: ${sceneContent}
+${characterNames ? `Characters involved: ${characterNames}` : ''}
+Style: Dramatic close-up or medium shot, cinematic lighting, high quality, detailed character expressions, emotional depth.
+Focus on the characters' emotions and key story moment.`
+    }
+  ];
+  
+  return prompts;
+};
+
+const generateSceneImages = async (sceneContent, sceneTitle, characters = []) => {
+  try {
+    console.log(`🎨 Generating images for scene: ${sceneTitle}`);
+    
+    const imagePrompts = generateImagePromptFromScene(sceneContent, sceneTitle, characters);
+    const generatedImages = [];
+    
+    for (let i = 0; i < imagePrompts.length; i++) {
+      const { type, prompt } = imagePrompts[i];
+      
+      try {
+        console.log(`🖼️ Generating ${type} image (${i + 1}/2)...`);
+        
+        const response = await genAIImage.models.generateContent({
+          model: "gemini-2.5-flash-image-preview",
+          contents: prompt,
+        });
+        
+        // Extract image data from response
+        if (response.candidates && response.candidates[0] && response.candidates[0].content && response.candidates[0].content.parts) {
+          for (const part of response.candidates[0].content.parts) {
+            if (part.inlineData && part.inlineData.data) {
+              generatedImages.push({
+                type: type,
+                base64Data: part.inlineData.data,
+                mimeType: part.inlineData.mimeType || 'image/png',
+                prompt: prompt.substring(0, 200) + '...', // Store truncated prompt for reference
+                generatedAt: new Date().toISOString()
+              });
+              console.log(`✅ Successfully generated ${type} image`);
+              break;
+            }
+          }
+        }
+      } catch (imageError) {
+        console.error(`❌ Error generating ${type} image:`, imageError.message);
+        // Continue with next image even if one fails
+        generatedImages.push({
+          type: type,
+          error: imageError.message,
+          prompt: prompt.substring(0, 200) + '...',
+          generatedAt: new Date().toISOString()
+        });
+      }
+      
+      // Add small delay between image generations to avoid rate limiting
+      if (i < imagePrompts.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    console.log(`🎉 Generated ${generatedImages.filter(img => !img.error).length}/${imagePrompts.length} images for scene: ${sceneTitle}`);
+    return generatedImages;
+    
+  } catch (error) {
+    console.error('❌ Error in generateSceneImages:', error);
+    return [{
+      error: `Image generation failed: ${error.message}`,
+      generatedAt: new Date().toISOString()
+    }];
   }
 };
 
@@ -487,6 +583,83 @@ Make sure positions are accurate and JSON is properly formatted.
   }
 };
 
+// Separate generation functions for modular processing
+const generateScenesOnly = async (characters, storyOutline) => {
+  console.log('📝 Generating story scenes only...');
+  return await generateStoryWithGemini(characters, storyOutline);
+};
+
+const generateEntitiesOnly = async (scenes, characterNames = []) => {
+  console.log('🔍 Extracting entities only...');
+  
+  if (!scenes || scenes.length === 0) {
+    throw new Error('No scenes provided for entity extraction');
+  }
+  
+  const scenesWithEntities = await Promise.all(
+    scenes.map(async (scene, index) => {
+      try {
+        console.log(`🎬 Extracting entities from scene ${index + 1}: ${scene.title}`);
+        
+        const entityData = await extractEntitiesFromScene(
+          scene.content, 
+          scene.title, 
+          characterNames
+        );
+        
+        return {
+          ...scene,
+          entities: entityData
+        };
+      } catch (error) {
+        console.error(`❌ Error processing scene ${index + 1}:`, error.message);
+        return {
+          ...scene,
+          entities: {
+            entities: [],
+            totalEntities: 0,
+            sceneLength: scene.content?.length || 0,
+            error: error.message
+          }
+        };
+      }
+    })
+  );
+  
+  return scenesWithEntities;
+};
+
+const generateImagesOnly = async (scenes, characters = []) => {
+  console.log('🎨 Generating images only...');
+  
+  if (!scenes || scenes.length === 0) {
+    throw new Error('No scenes provided for image generation');
+  }
+  
+  const scenesWithImages = await Promise.all(
+    scenes.map(async (scene, index) => {
+      try {
+        console.log(`🖼️ Generating images for scene ${index + 1}: ${scene.title}`);
+        
+        const sceneImages = await generateSceneImages(scene.content, scene.title, characters);
+        
+        return {
+          ...scene,
+          images: sceneImages || []
+        };
+      } catch (error) {
+        console.error(`❌ Error generating images for scene ${index + 1}:`, error.message);
+        return {
+          ...scene,
+          images: []
+        };
+      }
+    })
+  );
+  
+  return scenesWithImages;
+};
+
 // Enhanced story generation with entity extraction
 const generateStoryWithEntities = async (characters, storyOutline) => {
   try {
@@ -498,26 +671,27 @@ const generateStoryWithEntities = async (characters, storyOutline) => {
       return generatedStory;
     }
     
-    console.log('🔍 Starting entity extraction for all scenes...');
+    console.log('🔍 Starting entity extraction and image generation for all scenes...');
     
     // Extract character names for context
     const characterNames = characters.map(char => char.name);
     
-    // Process each scene to extract entities
-    const scenesWithEntities = await Promise.all(
+    // Process each scene to extract entities AND generate images
+    const scenesWithEntitiesAndImages = await Promise.all(
       generatedStory.scenes.map(async (scene, index) => {
         try {
           console.log(`🎬 Processing scene ${index + 1}: ${scene.title}`);
           
-          const entityData = await extractEntitiesFromScene(
-            scene.content, 
-            scene.title, 
-            characterNames
-          );
+          // Run entity extraction and image generation in parallel for efficiency
+          const [entityData, sceneImages] = await Promise.all([
+            extractEntitiesFromScene(scene.content, scene.title, characterNames),
+            generateSceneImages(scene.content, scene.title, characters)
+          ]);
           
           return {
             ...scene,
-            entities: entityData
+            entities: entityData,
+            images: sceneImages || []
           };
         } catch (error) {
           console.error(`❌ Error processing scene ${index + 1}:`, error.message);
@@ -528,28 +702,45 @@ const generateStoryWithEntities = async (characters, storyOutline) => {
               totalEntities: 0,
               sceneLength: scene.content?.length || 0,
               error: error.message
-            }
+            },
+            images: []
           };
         }
       })
     );
     
-    // Calculate total entities across all scenes
-    const totalSceneEntities = scenesWithEntities.reduce((total, scene) => 
+    // Calculate total entities and images across all scenes
+    const totalSceneEntities = scenesWithEntitiesAndImages.reduce((total, scene) => 
       total + (scene.entities?.totalEntities || 0), 0);
     
+    const totalSuccessfulImages = scenesWithEntitiesAndImages.reduce((total, scene) => 
+      total + (scene.images?.filter(img => !img.error).length || 0), 0);
+    
     console.log(`✨ Entity extraction completed! Total entities across all scenes: ${totalSceneEntities}`);
+    console.log(`🎨 Image generation completed! Total images generated: ${totalSuccessfulImages}`);
     
     return {
       ...generatedStory,
-      scenes: scenesWithEntities,
+      scenes: scenesWithEntitiesAndImages,
       entityMetadata: {
         totalEntitiesAcrossScenes: totalSceneEntities,
-        scenesProcessed: scenesWithEntities.length,
-        entitiesPerScene: scenesWithEntities.map(scene => ({
+        scenesProcessed: scenesWithEntitiesAndImages.length,
+        entitiesPerScene: scenesWithEntitiesAndImages.map(scene => ({
           sceneNumber: scene.sceneNumber,
           title: scene.title,
           entityCount: scene.entities?.totalEntities || 0
+        }))
+      },
+      imageMetadata: {
+        totalImagesGenerated: totalSuccessfulImages,
+        totalImageAttempts: scenesWithEntitiesAndImages.reduce((total, scene) => 
+          total + (scene.images?.length || 0), 0),
+        scenesProcessed: scenesWithEntitiesAndImages.length,
+        imagesPerScene: scenesWithEntitiesAndImages.map(scene => ({
+          sceneNumber: scene.sceneNumber,
+          title: scene.title,
+          successfulImages: scene.images?.filter(img => !img.error).length || 0,
+          failedImages: scene.images?.filter(img => img.error).length || 0
         }))
       }
     };
@@ -592,6 +783,248 @@ const updateStoryWithGeneratedContent = async (filepath, generatedStory) => {
   }
 };
 
+// Granular story processing function - only processes what's missing
+const processStoryGranularly = async (storyData, filepath) => {
+  try {
+    const characters = storyData.characters || [];
+    const storyOutline = storyData.story?.outline || 'A mysterious adventure begins...';
+    const characterNames = characters.map(char => char.name);
+    
+    let currentGeneratedStory = storyData.generatedStory || {};
+    let hasChanges = false;
+    
+    // Check and generate scenes if missing
+    const hasScenes = currentGeneratedStory.scenes && 
+                     currentGeneratedStory.scenes.length > 0;
+    
+    if (!hasScenes) {
+      console.log('📝 Missing scenes - generating...');
+      const newStory = await generateScenesOnly(characters, storyOutline);
+      currentGeneratedStory = {
+        ...currentGeneratedStory,
+        ...newStory
+      };
+      hasChanges = true;
+      console.log('✅ Scenes generated successfully');
+    } else {
+      console.log('✅ Scenes already exist');
+    }
+    
+    // Check and extract entities if missing
+    if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
+      const hasEntities = currentGeneratedStory.scenes.some(scene => 
+        scene.entities && scene.entities.totalEntities > 0
+      );
+      
+      if (!hasEntities) {
+        console.log('🔍 Missing entities - extracting...');
+        const scenesWithEntities = await generateEntitiesOnly(
+          currentGeneratedStory.scenes,
+          characterNames
+        );
+        
+        // Update scenes with entities
+        currentGeneratedStory.scenes = scenesWithEntities;
+        
+        // Update entity metadata
+        const totalSceneEntities = scenesWithEntities.reduce((total, scene) => 
+          total + (scene.entities?.totalEntities || 0), 0);
+        
+        currentGeneratedStory.entityMetadata = {
+          totalEntitiesAcrossScenes: totalSceneEntities,
+          scenesProcessed: scenesWithEntities.length,
+          entitiesPerScene: scenesWithEntities.map(scene => ({
+            sceneNumber: scene.sceneNumber,
+            title: scene.title,
+            entityCount: scene.entities?.totalEntities || 0
+          }))
+        };
+        
+        hasChanges = true;
+        console.log('✅ Entities extracted successfully');
+      } else {
+        console.log('✅ Entities already exist');
+      }
+    }
+    
+    // Check and generate images if missing
+    if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
+      const hasImages = currentGeneratedStory.scenes.some(scene => 
+        scene.images && scene.images.length > 0 && scene.images.some(img => !img.error)
+      );
+      
+      if (!hasImages) {
+        console.log('🎨 Missing images - generating...');
+        const scenesWithImages = await generateImagesOnly(
+          currentGeneratedStory.scenes,
+          characters
+        );
+        
+        // Update scenes with images
+        currentGeneratedStory.scenes = scenesWithImages;
+        
+        // Update image metadata
+        const totalSuccessfulImages = scenesWithImages.reduce((total, scene) => 
+          total + (scene.images?.filter(img => !img.error).length || 0), 0);
+        
+        currentGeneratedStory.imageMetadata = {
+          totalImagesGenerated: totalSuccessfulImages,
+          totalImageAttempts: scenesWithImages.reduce((total, scene) => 
+            total + (scene.images?.length || 0), 0),
+          scenesProcessed: scenesWithImages.length,
+          imagesPerScene: scenesWithImages.map(scene => ({
+            sceneNumber: scene.sceneNumber,
+            title: scene.title,
+            successfulImages: scene.images?.filter(img => !img.error).length || 0,
+            failedImages: scene.images?.filter(img => img.error).length || 0
+          }))
+        };
+        
+        hasChanges = true;
+        console.log('✅ Images generated successfully');
+      } else {
+        console.log('✅ Images already exist');
+      }
+    }
+    
+    // Update the file if there were any changes
+    if (hasChanges) {
+      console.log('💾 Updating story file with new content...');
+      await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
+      console.log('✅ Story file updated successfully');
+    } else {
+      console.log('✅ All content already exists, no updates needed');
+    }
+    
+    return currentGeneratedStory;
+    
+  } catch (error) {
+    console.error('❌ Error in granular story processing:', error.message);
+    throw error;
+  }
+};
+
+// Wrapper for granular processing that returns whether changes were made
+const processStoryGranularlyWithCheck = async (storyData, filepath) => {
+  try {
+    const characters = storyData.characters || [];
+    const storyOutline = storyData.story?.outline || 'A mysterious adventure begins...';
+    const characterNames = characters.map(char => char.name);
+    
+    let currentGeneratedStory = storyData.generatedStory || {};
+    let hasChanges = false;
+    
+    // Check and generate scenes if missing
+    const hasScenes = currentGeneratedStory.scenes && 
+                     currentGeneratedStory.scenes.length > 0;
+    
+    if (!hasScenes) {
+      console.log('📝 Missing scenes - generating...');
+      const newStory = await generateScenesOnly(characters, storyOutline);
+      currentGeneratedStory = {
+        ...currentGeneratedStory,
+        ...newStory
+      };
+      hasChanges = true;
+      console.log('✅ Scenes generated successfully');
+    } else {
+      console.log('✅ Scenes already exist');
+    }
+    
+    // Check and extract entities if missing
+    if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
+      const hasEntities = currentGeneratedStory.scenes.some(scene => 
+        scene.entities && scene.entities.totalEntities > 0
+      );
+      
+      if (!hasEntities) {
+        console.log('🔍 Missing entities - extracting...');
+        const scenesWithEntities = await generateEntitiesOnly(
+          currentGeneratedStory.scenes,
+          characterNames
+        );
+        
+        // Update scenes with entities
+        currentGeneratedStory.scenes = scenesWithEntities;
+        
+        // Update entity metadata
+        const totalSceneEntities = scenesWithEntities.reduce((total, scene) => 
+          total + (scene.entities?.totalEntities || 0), 0);
+        
+        currentGeneratedStory.entityMetadata = {
+          totalEntitiesAcrossScenes: totalSceneEntities,
+          scenesProcessed: scenesWithEntities.length,
+          entitiesPerScene: scenesWithEntities.map(scene => ({
+            sceneNumber: scene.sceneNumber,
+            title: scene.title,
+            entityCount: scene.entities?.totalEntities || 0
+          }))
+        };
+        
+        hasChanges = true;
+        console.log('✅ Entities extracted successfully');
+      } else {
+        console.log('✅ Entities already exist');
+      }
+    }
+    
+    // Check and generate images if missing
+    if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
+      const hasImages = currentGeneratedStory.scenes.some(scene => 
+        scene.images && scene.images.length > 0 && scene.images.some(img => !img.error)
+      );
+      
+      if (!hasImages) {
+        console.log('🎨 Missing images - generating...');
+        const scenesWithImages = await generateImagesOnly(
+          currentGeneratedStory.scenes,
+          characters
+        );
+        
+        // Update scenes with images
+        currentGeneratedStory.scenes = scenesWithImages;
+        
+        // Update image metadata
+        const totalSuccessfulImages = scenesWithImages.reduce((total, scene) => 
+          total + (scene.images?.filter(img => !img.error).length || 0), 0);
+        
+        currentGeneratedStory.imageMetadata = {
+          totalImagesGenerated: totalSuccessfulImages,
+          totalImageAttempts: scenesWithImages.reduce((total, scene) => 
+            total + (scene.images?.length || 0), 0),
+          scenesProcessed: scenesWithImages.length,
+          imagesPerScene: scenesWithImages.map(scene => ({
+            sceneNumber: scene.sceneNumber,
+            title: scene.title,
+            successfulImages: scene.images?.filter(img => !img.error).length || 0,
+            failedImages: scene.images?.filter(img => img.error).length || 0
+          }))
+        };
+        
+        hasChanges = true;
+        console.log('✅ Images generated successfully');
+      } else {
+        console.log('✅ Images already exist');
+      }
+    }
+    
+    // Update the file if there were any changes
+    if (hasChanges) {
+      console.log('💾 Updating story file with new content...');
+      await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
+      console.log('✅ Story file updated successfully');
+    } else {
+      console.log('✅ All content already exists, no updates needed');
+    }
+    
+    return hasChanges; // Return whether any changes were made
+    
+  } catch (error) {
+    console.error('❌ Error in granular story processing with check:', error.message);
+    return false;
+  }
+};
+
 // File watcher for story generation
 const setupStoryWatcher = () => {
   console.log('👀 Setting up story file watcher...');
@@ -611,22 +1044,10 @@ const setupStoryWatcher = () => {
         const fileContent = await fs.promises.readFile(filepath, 'utf8');
         const storyData = JSON.parse(fileContent);
         
-        // Check if story already has generated content
-        if (storyData.generatedStory) {
-          console.log('📚 Story already has generated content, skipping...');
-          return;
-        }
-        
         console.log(`🎭 Processing story: ${storyData.characters?.map(c => c.name).join(' & ')}`);
         
-        // Generate story with AI and extract entities
-        const generatedStory = await generateStoryWithEntities(
-          storyData.characters || [],
-          storyData.story?.outline || 'A mysterious adventure begins...'
-        );
-        
-        // Update the file with generated content
-        await updateStoryWithGeneratedContent(filepath, generatedStory);
+        // Use granular processing to only generate what's missing
+        await processStoryGranularly(storyData, filepath);
         
       } catch (error) {
         console.error(`❌ Error processing story file ${filepath}:`, error.message);
@@ -662,35 +1083,27 @@ const processExistingStories = async () => {
     let processedCount = 0;
     
     for (const story of stories) {
-      // Check if story already has generated content
-      if (story.generatedStory) {
-        console.log(`✅ Story "${story.characters?.map(c => c.name).join(' & ') || 'Unknown'}" already has generated content`);
-        continue;
-      }
-      
-      console.log(`🎭 Processing existing story: ${story.characters?.map(c => c.name).join(' & ') || 'Untitled Story'}`);
+      const storyName = story.characters?.map(c => c.name).join(' & ') || 'Untitled Story';
+      console.log(`🔍 Checking story: "${storyName}"`);
       
       try {
-        // Generate story with AI and extract entities
-        const generatedStory = await generateStoryWithEntities(
-          story.characters || [],
-          story.story?.outline || 'A mysterious adventure begins...'
-        );
-        
         // Find the original file path
         const filename = story.metadata?.filename;
-        if (filename) {
-          const filepath = path.join(storiesDir, filename);
-          
-          // Update the file with generated content
-          await updateStoryWithGeneratedContent(filepath, generatedStory);
-          processedCount++;
-        } else {
+        if (!filename) {
           console.log('⚠️  Could not find filename for story, skipping...');
+          continue;
+        }
+        
+        const filepath = path.join(storiesDir, filename);
+        
+        // Use granular processing to only generate what's missing
+        const hadChanges = await processStoryGranularlyWithCheck(story, filepath);
+        if (hadChanges) {
+          processedCount++;
         }
         
       } catch (error) {
-        console.error(`❌ Error processing existing story:`, error.message);
+        console.error(`❌ Error processing existing story "${storyName}":`, error.message);
       }
     }
     

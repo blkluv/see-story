@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import ItemCard from './ItemCard';
 
-const CategoryRow = ({ items }) => {
+const CategoryRow = ({ items, onPlayStory }) => {
   const scrollContainerRef = useRef(null);
 
   const scroll = (direction) => {
@@ -36,7 +36,7 @@ const CategoryRow = ({ items }) => {
       
       <div className="items-container" ref={scrollContainerRef}>
         {items.map((item) => (
-          <ItemCard key={item.id} item={item} />
+          <ItemCard key={item.id} item={item} onPlayStory={onPlayStory} />
         ))}
       </div>
       
