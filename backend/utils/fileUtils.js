@@ -58,7 +58,9 @@ const convertStoryToFeaturedItem = (story, index) => {
     featured: true,
     trailerUrl: '#',
     characterCount: story.characters?.length || 1,
-    createdAt: story.createdAt
+    createdAt: story.createdAt,
+    // Include the generated story data for playability detection
+    generatedStory: story.generatedStory || null
   };
 };
 
