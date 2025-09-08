@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
 const path = require('path');
 const chokidar = require('chokidar');
 
@@ -59,6 +60,42 @@ app.get(API_ENDPOINTS.CATEGORIES, (req, res) => {
     console.error('Error generating categories:', error);
     res.status(500).json({ error: 'Failed to generate categories' });
   }
+});
+
+// Audio endpoint to serve generated audio files
+app.get(`${API_ENDPOINTS.AUDIO}/:storyId`, (req, res) => {
+  const { storyId } = req.params;
+  const audioPath = path.join(__dirname, 'audio_backend', `story_${storyId}.mp3`);
+  
+  console.log(`🎵 Audio request for story: ${storyId}`);
+  
+  // Check if audio file exists
+  if (!fs.existsSync(audioPath)) {
+    console.log(`❌ Audio file not found: ${audioPath}`);
+    return res.status(404).json({ 
+      error: 'Audio file not found',
+      message: 'The audio for this story has not been generated yet or the story ID is invalid.',
+      storyId: storyId
+    });
+  }
+  
+  console.log(`✅ Serving audio file: ${audioPath}`);
+  
+  // Set appropriate headers for audio streaming
+  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+  
+  // Stream the audio file
+  const audioStream = fs.createReadStream(audioPath);
+  audioStream.pipe(res);
+  
+  audioStream.on('error', (error) => {
+    console.error('❌ Audio streaming error:', error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Audio streaming failed' });
+    }
+  });
 });
 
 app.post(API_ENDPOINTS.STORIES, async (req, res) => {

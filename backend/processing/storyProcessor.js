@@ -8,6 +8,7 @@ const {
   generateEntitiesOnly,
   generateImagesOnly 
 } = require('../ai/gemini');
+const { generateCompleteStoryAudio } = require('../ai/tts');
 
 // Story validation and analysis functions
 const validateStoryCompleteness = (story) => {
@@ -16,13 +17,16 @@ const validateStoryCompleteness = (story) => {
     hasValidScenes: false,
     hasEntities: false,
     hasImages: false,
+    hasAudio: false,
     emptyScenes: [],
     entityErrors: [],
     imageErrors: [],
+    audioErrors: [],
     totalScenes: 0,
     validScenes: 0,
     totalEntities: 0,
-    totalImages: 0
+    totalImages: 0,
+    audioStatus: null
   };
 
   if (!story.generatedStory) {
@@ -112,11 +116,38 @@ const validateStoryCompleteness = (story) => {
     validation.hasImages = validation.totalImages > 0;
   }
 
+  // Check audio
+  if (generatedStory.audio) {
+    if (generatedStory.audio.error) {
+      validation.audioErrors.push({
+        error: generatedStory.audio.error,
+        generatedAt: generatedStory.audio.generatedAt
+      });
+      validation.audioStatus = 'error';
+    } else if (generatedStory.audio.audioBase64 && generatedStory.audio.audioBase64.length > 0) {
+      validation.hasAudio = true;
+      if (generatedStory.audio.placeholder) {
+        validation.audioStatus = 'placeholder';
+      } else {
+        validation.audioStatus = 'complete';
+      }
+    } else {
+      validation.audioStatus = 'empty';
+    }
+  } else {
+    validation.audioStatus = 'missing';
+  }
+
   // Log validation results
   console.log(`📋 Story validation results:`);
   console.log(`   ✅ Scenes: ${validation.validScenes}/${validation.totalScenes} valid`);
   console.log(`   📊 Entities: ${validation.totalEntities} total`);
   console.log(`   🖼️ Images: ${validation.totalImages} total`);
+  if (validation.audioStatus === 'placeholder') {
+    console.log(`   🎵 Audio: ${validation.audioStatus} (silent audio - TTS not yet available)`);
+  } else {
+    console.log(`   🎵 Audio: ${validation.audioStatus}`);
+  }
   
   if (validation.emptyScenes.length > 0) {
     console.log(`   ❌ Empty scenes: ${validation.emptyScenes.length}`);
@@ -127,8 +158,28 @@ const validateStoryCompleteness = (story) => {
   if (validation.imageErrors.length > 0) {
     console.log(`   ❌ Image errors: ${validation.imageErrors.length}`);
   }
+  if (validation.audioErrors.length > 0) {
+    console.log(`   ❌ Audio errors: ${validation.audioErrors.length}`);
+  }
 
   return validation;
+};
+
+// Generate audio only for existing scenes
+const generateAudioOnly = async (scenes, storyId) => {
+  console.log('🎵 Generating audio for existing story...');
+  
+  try {
+    const audioResult = await generateCompleteStoryAudio(scenes, storyId);
+    console.log('✅ Audio generation completed successfully');
+    return audioResult;
+  } catch (error) {
+    console.error('❌ Audio generation failed:', error.message);
+    return {
+      error: error.message,
+      generatedAt: new Date().toISOString()
+    };
+  }
 };
 
 const regenerateFailedScenes = async (story, validation, characters, storyOutline) => {
@@ -372,11 +423,34 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
       }
     }
     
+    // Step 4: Handle audio (generate if missing or fix errors)
+    if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
+      if (!validation.hasAudio || validation.audioStatus === 'missing' || validation.audioStatus === 'error') {
+        console.log('🎵 Audio missing or has errors - generating complete story audio...');
+        
+        // Extract story ID from the file path for audio generation
+        const storyId = path.basename(filepath, '.json').replace('story_', '');
+        
+        const audioResult = await generateAudioOnly(currentGeneratedStory.scenes, storyId);
+        currentGeneratedStory.audio = audioResult;
+        hasChanges = true;
+        
+        if (audioResult.error) {
+          console.log(`   ❌ Audio generation failed: ${audioResult.error}`);
+        } else {
+          console.log(`   ✅ Audio: Generated for ${currentGeneratedStory.scenes.length} scenes`);
+        }
+      } else {
+        console.log('   ✅ Audio already exists and is valid');
+      }
+    }
+    
     // Final validation to check if story is now playable
     const finalValidation = validateStoryCompleteness({ ...storyData, generatedStory: currentGeneratedStory });
     const isPlayable = finalValidation.hasValidScenes && 
                        finalValidation.hasEntities && 
-                       finalValidation.hasImages;
+                       finalValidation.hasImages &&
+                       finalValidation.hasAudio;
     
     console.log(`🎯 Story "${storyName}" is ${isPlayable ? '✅ PLAYABLE' : '❌ NOT PLAYABLE'}`);
     
@@ -420,9 +494,11 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
         needsProcessing: !validation.hasValidScenes || 
                         !validation.hasEntities || 
                         !validation.hasImages ||
+                        !validation.hasAudio ||
                         validation.emptyScenes.length > 0 ||
                         validation.entityErrors.length > 0 ||
-                        validation.imageErrors.length > 0
+                        validation.imageErrors.length > 0 ||
+                        validation.audioErrors.length > 0
       };
     });
     
@@ -451,7 +527,7 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
       const { name: storyName, story, validation } = storyInfo;
       
       console.log(`\n📖 Processing: "${storyName}"`);
-      console.log(`   Missing - Scenes: ${!validation.hasValidScenes}, Entities: ${!validation.hasEntities}, Images: ${!validation.hasImages}`);
+      console.log(`   Missing - Scenes: ${!validation.hasValidScenes}, Entities: ${!validation.hasEntities}, Images: ${!validation.hasImages}, Audio: ${!validation.hasAudio}`);
       
       if (validation.emptyScenes.length > 0) {
         console.log(`   🚨 ${validation.emptyScenes.length} empty scenes need regeneration`);
@@ -461,6 +537,9 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
       }
       if (validation.imageErrors.length > 0) {
         console.log(`   🚨 ${validation.imageErrors.length} image errors need fixing`);
+      }
+      if (validation.audioErrors.length > 0) {
+        console.log(`   🚨 ${validation.audioErrors.length} audio errors need fixing`);
       }
       
       try {
@@ -485,7 +564,8 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
           const finalValidation = validateStoryCompleteness(updatedStory);
           const isNowPlayable = finalValidation.hasValidScenes && 
                                finalValidation.hasEntities && 
-                               finalValidation.hasImages;
+                               finalValidation.hasImages &&
+                               finalValidation.hasAudio;
           
           if (isNowPlayable) {
             successfullyCompleted++;
@@ -518,6 +598,7 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
 
 module.exports = {
   validateStoryCompleteness,
+  generateAudioOnly,
   regenerateFailedScenes,
   regenerateFailedEntities,
   regenerateFailedImages,

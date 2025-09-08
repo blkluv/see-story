@@ -8,12 +8,15 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "@google-cloud/text-to-speech": "^5.2.0",
     "@google/genai": "^1.17.0",
     "@google/generative-ai": "^0.21.0",
     "chokidar": "^3.5.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "ffmpeg-static": "^5.2.0",
+    "fluent-ffmpeg": "^2.1.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"

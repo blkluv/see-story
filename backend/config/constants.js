@@ -49,7 +49,8 @@ const ITEMS_PER_CATEGORY = 30;
 const API_ENDPOINTS = {
   FEATURED: '/api/featured',
   CATEGORIES: '/api/categories',
-  STORIES: '/api/stories'
+  STORIES: '/api/stories',
+  AUDIO: '/api/audio'
 };
 
 // File configuration

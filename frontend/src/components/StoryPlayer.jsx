@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './StoryPlayer.css';
 
 const StoryPlayer = ({ story, onBack }) => {
@@ -11,6 +11,9 @@ const StoryPlayer = ({ story, onBack }) => {
   const [subtitleProgress, setSubtitleProgress] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const audioRef = useRef(null);
 
   // Timing calculations - 10 minutes total (600 seconds)
   const totalDuration = 600; // 10 minutes in seconds
@@ -34,6 +37,33 @@ const StoryPlayer = ({ story, onBack }) => {
       setSubtitleText(currentScene.content);
     }
   }, [currentSceneIndex]);
+
+  // Initialize and sync audio
+  useEffect(() => {
+    if (audioRef.current && story?.generatedStory?.audio?.audioBase64) {
+      const audio = audioRef.current;
+      
+      // Set initial properties
+      audio.volume = isMuted ? 0 : volume;
+      audio.playbackRate = playbackSpeed;
+      
+      // Sync audio time with visual timeline
+      const audioCurrentTime = (timeElapsed / totalDuration) * (audio.duration || totalDuration);
+      if (Math.abs(audio.currentTime - audioCurrentTime) > 1) {
+        audio.currentTime = audioCurrentTime;
+      }
+    }
+  }, [story, volume, isMuted, playbackSpeed, timeElapsed, totalDuration]);
+
+  // Sync audio when progress is manually changed
+  useEffect(() => {
+    if (audioRef.current && audioRef.current.duration) {
+      const targetTime = (timeElapsed / totalDuration) * audioRef.current.duration;
+      if (Math.abs(audioRef.current.currentTime - targetTime) > 0.5) {
+        audioRef.current.currentTime = targetTime;
+      }
+    }
+  }, [timeElapsed, totalDuration]);
 
   useEffect(() => {
     let interval;
@@ -93,14 +123,50 @@ const StoryPlayer = ({ story, onBack }) => {
       setCurrentImageIndex(0);
       setSubtitleProgress(0);
       setIsPlaying(true);
+      // Reset audio to beginning
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.play();
+      }
     } else {
       // Normal play/pause toggle
-      setIsPlaying(!isPlaying);
+      const newPlayState = !isPlaying;
+      setIsPlaying(newPlayState);
+      
+      // Sync audio playback
+      if (audioRef.current) {
+        if (newPlayState) {
+          audioRef.current.play();
+        } else {
+          audioRef.current.pause();
+        }
+      }
     }
   };
 
   const handleSpeedChange = () => {
-    setPlaybackSpeed(prev => prev === 1 ? 2 : prev === 2 ? 0.5 : 1);
+    const newSpeed = playbackSpeed === 1 ? 2 : playbackSpeed === 2 ? 0.5 : 1;
+    setPlaybackSpeed(newSpeed);
+    
+    // Sync audio playback speed
+    if (audioRef.current) {
+      audioRef.current.playbackRate = newSpeed;
+    }
+  };
+
+  const handleVolumeChange = (newVolume) => {
+    setVolume(newVolume);
+    if (audioRef.current) {
+      audioRef.current.volume = isMuted ? 0 : newVolume;
+    }
+  };
+
+  const handleMuteToggle = () => {
+    const newMutedState = !isMuted;
+    setIsMuted(newMutedState);
+    if (audioRef.current) {
+      audioRef.current.volume = newMutedState ? 0 : volume;
+    }
   };
 
   const handleFullscreen = () => {
@@ -263,6 +329,22 @@ const StoryPlayer = ({ story, onBack }) => {
           </div>
 
           <div className="secondary-controls">
+            <button onClick={handleMuteToggle} className="control-btn volume-btn">
+              <span className="icon">{isMuted ? '🔇' : '🔊'}</span>
+            </button>
+            
+            <div className="volume-slider">
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={volume}
+                onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                className="volume-range"
+              />
+            </div>
+            
             <button onClick={handleSpeedChange} className="control-btn speed-btn">
               <span className="icon">{playbackSpeed}x</span>
             </button>
@@ -273,6 +355,21 @@ const StoryPlayer = ({ story, onBack }) => {
           </div>
         </div>
       </div>
+
+      {/* Hidden audio element for narration */}
+      {story?.generatedStory?.audio?.audioBase64 && (
+        <audio
+          ref={audioRef}
+          preload="auto"
+          style={{ display: 'none' }}
+        >
+          <source
+            src={`data:${story.generatedStory.audio.mimeType || 'audio/mpeg'};base64,${story.generatedStory.audio.audioBase64}`}
+            type={story.generatedStory.audio.mimeType || 'audio/mpeg'}
+          />
+          Your browser does not support the audio element.
+        </audio>
+      )}
 
       <div className="story-info">
         <h2 className="story-title">

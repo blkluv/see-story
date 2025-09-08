@@ -295,6 +295,53 @@
   font-size: 18px;
 }
 
+.volume-btn {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+  font-weight: bold;
+  min-width: 50px;
+}
+
+.volume-btn:hover {
+  background: rgba(255,255,255,0.2);
+}
+
+.volume-slider {
+  display: flex;
+  align-items: center;
+  margin: 0 10px;
+}
+
+.volume-range {
+  width: 80px;
+  height: 4px;
+  background: rgba(255,255,255,0.3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+}
+
+.volume-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.volume-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
 .back-btn {
   width: auto;
   padding: 0 15px;
