@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './StoryPlayer.css';
+import RegenerationControl from './RegenerationControl';
 
 const StoryPlayer = ({ story, onBack }) => {
   const [isPlaying, setIsPlaying] = useState(true); // Auto-start playing
@@ -510,6 +511,20 @@ const StoryPlayer = ({ story, onBack }) => {
               : `Using ${Math.round(totalDuration/60)}min fallback timing`
             }
           </span>
+        </div>
+        
+        {/* Regeneration Control */}
+        <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+          <div style={{ marginBottom: '8px', fontSize: '14px', fontWeight: 'bold', color: '#495057' }}>
+            🔧 Story Regeneration Control
+          </div>
+          <RegenerationControl 
+            storyId={story.id}
+            storyName={story.characters?.map(char => char.name).join(' & ') || 'Untitled Story'}
+          />
+          <div style={{ fontSize: '12px', color: '#6c757d', marginTop: '8px' }}>
+            Use this control to force complete regeneration of all story content (scenes, entities, images, and audio).
+          </div>
         </div>
       </div>
     </div>

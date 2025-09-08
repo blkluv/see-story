@@ -347,6 +347,12 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     
     console.log(`🔍 Processing story: "${storyName}"`);
     
+    // Check for force regeneration flag
+    const forceRegenerate = storyData.forceRegenerate === true;
+    if (forceRegenerate) {
+      console.log('🔄 Force regeneration flag detected - will regenerate all content');
+    }
+    
     // First, validate the current state of the story
     const validation = validateStoryCompleteness(storyData);
     
@@ -354,7 +360,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     let hasChanges = false;
     
     // Step 1: Handle scenes (generate if missing or regenerate if empty)
-    if (!validation.hasScenes) {
+    if (!validation.hasScenes || forceRegenerate) {
       console.log('📝 No scenes found - generating complete story...');
       currentGeneratedStory = await generateScenesOnly(characters, storyOutline);
       hasChanges = true;
@@ -368,7 +374,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
           summary: currentGeneratedStory.summary
         }, 'scenes-generated');
       }
-    } else if (validation.emptyScenes.length > 0) {
+    } else if (validation.emptyScenes.length > 0 && !forceRegenerate) {
       console.log(`📝 Found ${validation.emptyScenes.length} empty/invalid scenes - regenerating...`);
       currentGeneratedStory = await regenerateFailedScenes({
         ...storyData,
@@ -390,7 +396,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     
     // Step 2: Handle entities (extract if missing or fix errors)
     if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
-      if (validation.totalEntities === 0) {
+      if (validation.totalEntities === 0 || forceRegenerate) {
         console.log('🔍 No entities found - extracting for all scenes...');
         const scenesWithEntities = await generateEntitiesOnly(
           currentGeneratedStory.scenes,
@@ -422,7 +428,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
             entityMetadata: currentGeneratedStory.entityMetadata
           }, 'entities-generated');
         }
-      } else if (validation.entityErrors.length > 0) {
+      } else if (validation.entityErrors.length > 0 && !forceRegenerate) {
         console.log(`🔧 Found ${validation.entityErrors.length} entity errors - fixing...`);
         currentGeneratedStory = await regenerateFailedEntities({
           ...storyData,
@@ -444,7 +450,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     
     // Step 3: Handle images (generate if missing or fix errors)
     if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
-      if (validation.totalImages === 0) {
+      if (validation.totalImages === 0 || forceRegenerate) {
         console.log('🎨 No images found - generating for all scenes...');
         const scenesWithImages = await generateImagesOnly(
           currentGeneratedStory.scenes,
@@ -479,7 +485,7 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
             imageMetadata: currentGeneratedStory.imageMetadata
           }, 'images-generated');
         }
-      } else if (validation.imageErrors.length > 0) {
+      } else if (validation.imageErrors.length > 0 && !forceRegenerate) {
         console.log(`🔧 Found ${validation.imageErrors.length} image errors - fixing...`);
         currentGeneratedStory = await regenerateFailedImages({
           ...storyData,
@@ -506,7 +512,8 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
                                     validation.audioStatus === 'error' ||
                                     validation.audioStatus === 'file_missing' ||
                                     validation.audioStatus === 'incomplete' ||
-                                    validation.audioStatus === 'empty';
+                                    validation.audioStatus === 'empty' ||
+                                    forceRegenerate;
       
       if (needsAudioRegeneration) {
         console.log(`🎵 Audio needs regeneration (status: ${validation.audioStatus}) - generating complete story audio...`);
@@ -551,11 +558,22 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     
     console.log(`🎯 Story "${storyName}" is ${isPlayable ? '✅ PLAYABLE' : '❌ NOT PLAYABLE'}`);
     
+    // Reset the force regeneration flag if it was set
+    if (forceRegenerate) {
+      console.log('🔄 Resetting force regeneration flag');
+      hasChanges = true;
+      // Remove the forceRegenerate flag from the story data
+      delete storyData.forceRegenerate;
+    }
+    
     // Final save if there were any changes (consolidation)
     if (hasChanges) {
       console.log('💾 Final consolidation of story file...');
       if (updateStoryIncremental) {
-        await updateStoryIncremental(filepath, currentGeneratedStory, 'story-complete');
+        await updateStoryIncremental(filepath, {
+          ...currentGeneratedStory,
+          forceRegenerate: undefined // Ensure flag is removed
+        }, forceRegenerate ? 'story-force-regenerated' : 'story-complete');
       } else {
         await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
       }

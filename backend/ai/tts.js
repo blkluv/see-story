@@ -132,34 +132,62 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
       throw new Error('Gemini AI client not initialized');
     }
     
-    // Clean up the text for better TTS
+    // Enhanced text cleanup for better TTS
     let cleanText = sceneContent
       .replace(/\n+/g, ' ') // Replace newlines with spaces
       .replace(/\s+/g, ' ') // Normalize whitespace
+      .replace(/\.{2,}/g, '.') // Replace multiple dots with single dot
+      .replace(/,{2,}/g, ',') // Replace multiple commas with single comma
+      .replace(/!{2,}/g, '!') // Replace multiple exclamations with single
+      .replace(/\?{2,}/g, '?') // Replace multiple questions with single
       .trim();
     
-    // Remove common duplication patterns that might cause audio repetition
-    // Look for repeated words or phrases
+    // Advanced deduplication to prevent TTS repetition issues
     const words = cleanText.split(' ');
     const deduplicatedWords = [];
     let prevWord = '';
+    let prevPrevWord = '';
     
     for (const word of words) {
-      // Skip if same word appears consecutively (but allow intentional repetition)
-      if (word.toLowerCase() !== prevWord.toLowerCase() || 
-          ['the', 'a', 'an', 'and', 'or', 'but', 'very', 'really', 'quite'].includes(word.toLowerCase())) {
-        deduplicatedWords.push(word);
-      } else {
-        console.log(`   🔄 Skipped duplicate word: "${word}"`);
+      const cleanWord = word.replace(/[^\w]/g, '').toLowerCase();
+      const prevCleanWord = prevWord.replace(/[^\w]/g, '').toLowerCase();
+      const prevPrevCleanWord = prevPrevWord.replace(/[^\w]/g, '').toLowerCase();
+      
+      // Skip consecutive duplicate words (except common words)
+      if (cleanWord === prevCleanWord && 
+          !['the', 'a', 'an', 'and', 'or', 'but', 'very', 'really', 'quite', 'was', 'is', 'that', 'in', 'on', 'at'].includes(cleanWord)) {
+        console.log(`   🔄 Skipped consecutive duplicate: "${word}"`);
+        continue;
       }
+      
+      // Skip word if it's the same as two words ago (common repetition pattern)
+      if (cleanWord.length > 3 && cleanWord === prevPrevCleanWord) {
+        console.log(`   🔄 Skipped alternating duplicate: "${word}"`);
+        continue;
+      }
+      
+      // Skip if word is a substring of previous word (partial repetition)
+      if (cleanWord.length > 2 && prevCleanWord.includes(cleanWord) && cleanWord !== prevCleanWord) {
+        console.log(`   🔄 Skipped partial repetition: "${word}" (contained in "${prevWord}")`);
+        continue;
+      }
+      
+      deduplicatedWords.push(word);
+      prevPrevWord = prevWord;
       prevWord = word;
     }
     
     cleanText = deduplicatedWords.join(' ').trim();
     
-    // Configure Gemini TTS request
+    // Final cleanup for TTS-specific issues
+    cleanText = cleanText
+      .replace(/(\w)\1{2,}/g, '$1$1') // Reduce triple+ repeated characters to double
+      .replace(/\b(\w+)\s+\1\b/gi, '$1') // Remove immediate word repetitions like "the the"
+      .trim();
+    
+    // Configure Gemini TTS request with repetition prevention
     const config = {
-      temperature: GEMINI_TTS_TEMPERATURE,
+      temperature: Math.min(GEMINI_TTS_TEMPERATURE, 0.7), // Lower temperature to reduce repetition
       responseModalities: ['audio'],
       speechConfig: {
         voiceConfig: {
@@ -167,6 +195,13 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
             voiceName: GEMINI_TTS_VOICE,
           }
         }
+      },
+      // Add generation config to prevent repetition
+      generationConfig: {
+        maxOutputTokens: Math.min(8192, cleanText.length * 4), // Limit output based on input
+        topK: 40,
+        topP: 0.95,
+        temperature: Math.min(GEMINI_TTS_TEMPERATURE, 0.7)
       },
     };
 
@@ -188,8 +223,10 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
     });
 
     const audioChunks = [];
+    const chunkHashes = new Set(); // Track chunk hashes to prevent duplicates
     let totalSize = 0;
     let chunkCount = 0;
+    let duplicateCount = 0;
     
     for await (const chunk of response) {
       // Debug logging for chunk structure
@@ -213,8 +250,25 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
         if (inlineData && inlineData.data) {
           console.log(`     🎵 Found audio data in part ${partIndex}: ${inlineData.data.length} base64 chars, type: ${inlineData.mimeType}`);
           
+          // Create hash of audio data to detect duplicates
+          const crypto = require('crypto');
+          const dataHash = crypto.createHash('md5').update(inlineData.data).digest('hex');
+          
+          // Skip if we've already seen this exact audio data
+          if (chunkHashes.has(dataHash)) {
+            duplicateCount++;
+            console.log(`     🔄 Skipped duplicate audio chunk ${duplicateCount} (hash: ${dataHash.substring(0, 8)}...)`);
+            continue;
+          }
+          
           let buffer = Buffer.from(inlineData.data, 'base64');
           let mimeType = inlineData.mimeType || '';
+          
+          // Validate buffer size (skip suspiciously small chunks that might be artifacts)
+          if (buffer.length < 100) {
+            console.log(`     ⚠️ Skipping very small audio chunk: ${buffer.length} bytes (likely artifact)`);
+            continue;
+          }
           
           // Convert to WAV if needed
           let fileExtension = mime.default.getExtension(mimeType);
@@ -222,16 +276,31 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
             fileExtension = 'wav';
             buffer = convertToWav(inlineData.data, mimeType);
             console.log(`     🔄 Converted to WAV: ${buffer.length} bytes`);
+            
+            // Update hash after conversion
+            const convertedDataHash = crypto.createHash('md5').update(buffer).digest('hex');
+            if (chunkHashes.has(convertedDataHash)) {
+              duplicateCount++;
+              console.log(`     🔄 Skipped duplicate converted audio chunk (hash: ${convertedDataHash.substring(0, 8)}...)`);
+              continue;
+            }
+            chunkHashes.add(convertedDataHash);
+          } else {
+            chunkHashes.add(dataHash);
           }
           
           audioChunks.push(buffer);
           totalSize += buffer.length;
-          console.log(`     ✅ Added chunk ${audioChunks.length}: ${buffer.length} bytes (total: ${totalSize})`);
+          console.log(`     ✅ Added unique chunk ${audioChunks.length}: ${buffer.length} bytes (total: ${totalSize})`);
         } else if (part.text) {
           console.log(`     📝 Found text response: "${part.text.substring(0, 50)}..."`);
           // This might be text output instead of audio - could indicate an issue
         }
       }
+    }
+    
+    if (duplicateCount > 0) {
+      console.log(`   🎯 Filtered out ${duplicateCount} duplicate audio chunks`);
     }
     
     console.log(`🎵 Streaming complete: ${audioChunks.length} audio chunks, ${totalSize} total bytes`);
@@ -433,20 +502,22 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
       command.input(file.filepath);
     });
     
-    // Use a different concatenation method that prevents overlap
-    // Instead of using concat filter, use individual inputs with no gaps
+    // Enhanced concatenation method with gap prevention and normalization
     const filterParts = audioFiles.map((_, index) => `[${index}:a]`).join('');
-    const concatFilter = `${filterParts}concat=n=${audioFiles.length}:v=0:a=1[out]`;
+    
+    // Use advanced concat filter with audio resampling to ensure consistency
+    const concatFilter = `${filterParts}concat=n=${audioFiles.length}:v=0:a=1:unsafe=0[concat];[concat]aresample=22050[out]`;
     
     console.log(`🔧 FFmpeg filter: ${concatFilter}`);
     
-    // Configure output with proper audio normalization
+    // Configure output with enhanced audio processing
     command
       .outputOptions([
         '-filter_complex', concatFilter,
         '-map', '[out]',
         '-avoid_negative_ts', 'make_zero', // Avoid timing issues
-        '-fflags', '+genpts' // Generate presentation timestamps
+        '-fflags', '+genpts', // Generate presentation timestamps
+        '-ac', '1' // Ensure mono output
       ])
       .audioCodec('libmp3lame')
       .audioBitrate('128k')

@@ -177,7 +177,97 @@ app.post(API_ENDPOINTS.STORIES, async (req, res) => {
   }
 });
 
+// Toggle regeneration flag for a story
+app.put(`${API_ENDPOINTS.STORIES}/:storyId/regenerate`, async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    const { forceRegenerate } = req.body;
+    
+    console.log(`🔄 Toggle regeneration flag for story ${storyId}: ${forceRegenerate}`);
+    
+    // Find the story file
+    const stories = require('./utils/fileUtils').readStoriesFromDirectory(STORIES_DIR);
+    const story = stories.find(s => s.id.toString() === storyId.toString());
+    
+    if (!story) {
+      return res.status(404).json({ 
+        error: 'Story not found',
+        storyId: storyId
+      });
+    }
+    
+    // Get the story filename
+    const filename = story.metadata?.filename;
+    if (!filename) {
+      return res.status(400).json({ 
+        error: 'Story filename not found',
+        storyId: storyId
+      });
+    }
+    
+    const filepath = path.join(STORIES_DIR, filename);
+    
+    // Read current story data
+    const storyData = JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    
+    // Update the regeneration flag
+    if (forceRegenerate === true) {
+      storyData.forceRegenerate = true;
+      console.log(`✅ Set regeneration flag for story: ${storyData.characters?.map(c => c.name).join(' & ') || 'Unnamed'}`);
+    } else {
+      delete storyData.forceRegenerate;
+      console.log(`❌ Removed regeneration flag for story: ${storyData.characters?.map(c => c.name).join(' & ') || 'Unnamed'}`);
+    }
+    
+    // Save the updated story
+    fs.writeFileSync(filepath, JSON.stringify(storyData, null, 2));
+    
+    res.json({
+      message: `Regeneration flag ${forceRegenerate ? 'set' : 'removed'} successfully`,
+      storyId: storyId,
+      forceRegenerate: forceRegenerate || false,
+      storyName: storyData.characters?.map(c => c.name).join(' & ') || 'Unnamed Story'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error toggling regeneration flag:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to toggle regeneration flag',
+      details: error.message 
+    });
+  }
+});
 
+// Get story regeneration status
+app.get(`${API_ENDPOINTS.STORIES}/:storyId/regenerate`, async (req, res) => {
+  try {
+    const { storyId } = req.params;
+    
+    // Find the story file
+    const stories = require('./utils/fileUtils').readStoriesFromDirectory(STORIES_DIR);
+    const story = stories.find(s => s.id.toString() === storyId.toString());
+    
+    if (!story) {
+      return res.status(404).json({ 
+        error: 'Story not found',
+        storyId: storyId
+      });
+    }
+    
+    res.json({
+      storyId: storyId,
+      forceRegenerate: story.forceRegenerate === true,
+      storyName: story.characters?.map(c => c.name).join(' & ') || 'Unnamed Story'
+    });
+    
+  } catch (error) {
+    console.error('❌ Error getting regeneration status:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to get regeneration status',
+      details: error.message 
+    });
+  }
+});
 
 // Server startup
 app.listen(PORT, () => {
