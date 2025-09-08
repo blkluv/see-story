@@ -3,7 +3,6 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const chokidar = require('chokidar');
 
 // Import custom modules
 const { 
@@ -14,11 +13,6 @@ const {
   ensureStoriesDirectory
 } = require('./utils/fileUtils');
 
-const {
-  validateStoryCompleteness,
-  processStoryGranularlyWithCheck,
-  processExistingStories
-} = require('./processing/storyProcessor');
 
 const {
   PORT,
@@ -148,7 +142,8 @@ app.post(API_ENDPOINTS.STORIES, async (req, res) => {
           console.log('🚀 Starting background story processing...');
           const storyData = JSON.parse(require('fs').readFileSync(filepath, 'utf8'));
           await processStoryGranularlyWithCheck(storyData, filepath, {
-            updateStoryWithGeneratedContent: require('./utils/fileUtils').updateStoryWithGeneratedContent
+            updateStoryWithGeneratedContent: require('./utils/fileUtils').updateStoryWithGeneratedContent,
+            updateStoryIncremental: require('./utils/fileUtils').updateStoryIncremental
           });
         } catch (bgError) {
           console.error('❌ Background processing error:', bgError.message);
@@ -182,59 +177,7 @@ app.post(API_ENDPOINTS.STORIES, async (req, res) => {
   }
 });
 
-// File watcher for story generation
-const setupStoryWatcher = () => {
-  console.log('👀 Setting up story file watcher...');
-  
-  const watcher = chokidar.watch(STORIES_DIR, {
-    ignored: /^\./, // ignore dotfiles
-    persistent: true,
-    ignoreInitial: true // don't trigger for files that already exist
-  });
-  
-  watcher.on('add', async (filepath) => {
-    if (path.extname(filepath) === '.json') {
-      console.log(`📁 New story file detected: ${path.basename(filepath)}`);
-      
-      try {
-        // Small delay to ensure file is fully written
-        setTimeout(async () => {
-          try {
-            const fileContent = require('fs').readFileSync(filepath, 'utf8');
-            const storyData = JSON.parse(fileContent);
-            
-            console.log('🔄 Processing newly detected story...');
-            await processStoryGranularlyWithCheck(storyData, filepath, {
-              updateStoryWithGeneratedContent: require('./utils/fileUtils').updateStoryWithGeneratedContent
-            });
-          } catch (processError) {
-            console.error('❌ Error processing new story file:', processError.message);
-          }
-        }, 2000);
-        
-      } catch (error) {
-        console.error('❌ Error handling new story file:', error.message);
-      }
-    }
-  });
 
-  return watcher;
-};
-
-// Enhanced startup processing with detailed logging - wrapper function
-const processExistingStoriesWrapper = async () => {
-  const dependencies = {
-    readStoriesFromDirectory: () => readStoriesFromDirectory(STORIES_DIR),
-    validateStoryCompleteness,
-    processStoryGranularlyWithCheck: (storyData, filepath) => 
-      processStoryGranularlyWithCheck(storyData, filepath, {
-        updateStoryWithGeneratedContent: require('./utils/fileUtils').updateStoryWithGeneratedContent
-      }),
-    storiesDir: STORIES_DIR
-  };
-  
-  return await processExistingStories(dependencies);
-};
 
 // Server startup
 app.listen(PORT, () => {
@@ -244,25 +187,6 @@ app.listen(PORT, () => {
   console.log(`📂 Categories: http://localhost:${PORT}${API_ENDPOINTS.CATEGORIES}`);
   console.log(`✍️  Create story: POST http://localhost:${PORT}${API_ENDPOINTS.STORIES}`);
   
-  // Set up file watcher
-  setupStoryWatcher();
-  
-  // Check for API key and enable AI features
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your-gemini-api-key-here') {
-    console.log('🤖 AI Story generation enabled with Gemini API');
-    
-    // Process existing stories in the background (don't block server startup)
-    setTimeout(async () => {
-      try {
-        await processExistingStoriesWrapper();
-      } catch (error) {
-        console.error('❌ Error in background story processing:', error.message);
-      }
-    }, 2000); // Wait 2 seconds after server start to let everything initialize
-  } else {
-    console.log('⚠️ GEMINI_API_KEY not found. AI story generation is disabled.');
-    console.log('   Please set your Gemini API key in the .env file to enable AI features.');
-  }
-  
-  console.log('✅ Story watcher is ready and monitoring for new stories');
+  console.log('ℹ️ Story watching and AI processing handled by separate story-watcher.js service');
+  console.log('   Run "npm run dev" to start both server and story watcher together');
 });

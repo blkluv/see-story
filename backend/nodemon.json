@@ -1,0 +1,20 @@
+{
+  "watch": [
+    "server.js",
+    "ai/**/*.js",
+    "config/**/*.js",
+    "processing/**/*.js",
+    "utils/**/*.js"
+  ],
+  "ignore": [
+    "stories/**",
+    "audio_backend/**",
+    "temp/**",
+    "*.log",
+    "node_modules"
+  ],
+  "ext": "js,json",
+  "env": {
+    "NODE_ENV": "development"
+  }
+}

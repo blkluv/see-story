@@ -224,6 +224,52 @@ const saveStoryToFile = async (story, storiesDir) => {
   return filepath;
 };
 
+// Function to incrementally update specific parts of the story during generation
+const updateStoryIncremental = async (filepath, updateData, stepName = '') => {
+  try {
+    console.log(`💾 Incrementally updating story file${stepName ? ` (${stepName})` : ''}...`);
+    
+    // Read existing story
+    const existingContent = await fs.promises.readFile(filepath, 'utf8');
+    const storyData = JSON.parse(existingContent);
+    
+    // Ensure generatedStory exists
+    if (!storyData.generatedStory) {
+      storyData.generatedStory = {
+        generatedAt: new Date().toISOString()
+      };
+    }
+    
+    // Merge the update data into generatedStory
+    storyData.generatedStory = {
+      ...storyData.generatedStory,
+      ...updateData,
+      lastStepCompleted: stepName,
+      lastStepCompletedAt: new Date().toISOString()
+    };
+    
+    // Calculate word count if scenes exist
+    if (storyData.generatedStory.scenes) {
+      storyData.generatedStory.wordCount = storyData.generatedStory.scenes.reduce((total, scene) => 
+        total + (scene.content?.split(' ').length || 0), 0);
+    }
+    
+    // Update metadata
+    storyData.metadata.hasGeneratedStory = true;
+    storyData.metadata.lastUpdated = new Date().toISOString();
+    storyData.metadata.generationProgress = stepName;
+    
+    // Write updated content back to file
+    await fs.promises.writeFile(filepath, JSON.stringify(storyData, null, 2), 'utf8');
+    
+    console.log(`✅ Story file updated with ${stepName || 'generated content'}`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error updating story file incrementally:', error.message);
+    return false;
+  }
+};
+
 // Function to update story file with generated content
 const updateStoryWithGeneratedContent = async (filepath, generatedStory) => {
   try {
@@ -274,5 +320,6 @@ module.exports = {
   processCharacters,
   saveStoryToFile,
   updateStoryWithGeneratedContent,
+  updateStoryIncremental,
   ensureStoriesDirectory
 };

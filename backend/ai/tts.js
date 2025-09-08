@@ -133,10 +133,29 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
     }
     
     // Clean up the text for better TTS
-    const cleanText = sceneContent
+    let cleanText = sceneContent
       .replace(/\n+/g, ' ') // Replace newlines with spaces
       .replace(/\s+/g, ' ') // Normalize whitespace
       .trim();
+    
+    // Remove common duplication patterns that might cause audio repetition
+    // Look for repeated words or phrases
+    const words = cleanText.split(' ');
+    const deduplicatedWords = [];
+    let prevWord = '';
+    
+    for (const word of words) {
+      // Skip if same word appears consecutively (but allow intentional repetition)
+      if (word.toLowerCase() !== prevWord.toLowerCase() || 
+          ['the', 'a', 'an', 'and', 'or', 'but', 'very', 'really', 'quite'].includes(word.toLowerCase())) {
+        deduplicatedWords.push(word);
+      } else {
+        console.log(`   🔄 Skipped duplicate word: "${word}"`);
+      }
+      prevWord = word;
+    }
+    
+    cleanText = deduplicatedWords.join(' ').trim();
     
     // Configure Gemini TTS request
     const config = {
@@ -159,6 +178,7 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
     }];
 
     console.log(`🔄 Synthesizing speech for Scene ${sceneIndex + 1} (${cleanText.length} chars)...`);
+    console.log(`📝 Text to synthesize: "${cleanText.substring(0, 100)}..."`);
     
     // Generate streaming response
     const response = await geminiClient.models.generateContentStream({
@@ -169,28 +189,52 @@ const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex
 
     const audioChunks = [];
     let totalSize = 0;
+    let chunkCount = 0;
     
     for await (const chunk of response) {
+      // Debug logging for chunk structure
+      console.log(`   📦 Received chunk ${++chunkCount}:`, {
+        hasCandidates: !!chunk.candidates,
+        candidateCount: chunk.candidates?.length || 0,
+        hasContent: !!(chunk.candidates?.[0]?.content),
+        hasInlineData: !!(chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData)
+      });
+      
       if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
         continue;
       }
       
-      const inlineData = chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      if (inlineData) {
-        let buffer = Buffer.from(inlineData.data || '', 'base64');
-        let mimeType = inlineData.mimeType || '';
+      // Process all parts in the chunk (there might be multiple parts)
+      const parts = chunk.candidates[0].content.parts;
+      for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+        const part = parts[partIndex];
+        const inlineData = part.inlineData;
         
-        // Convert to WAV if needed
-        let fileExtension = mime.default.getExtension(mimeType);
-        if (!fileExtension) {
-          fileExtension = 'wav';
-          buffer = convertToWav(inlineData.data || '', mimeType);
+        if (inlineData && inlineData.data) {
+          console.log(`     🎵 Found audio data in part ${partIndex}: ${inlineData.data.length} base64 chars, type: ${inlineData.mimeType}`);
+          
+          let buffer = Buffer.from(inlineData.data, 'base64');
+          let mimeType = inlineData.mimeType || '';
+          
+          // Convert to WAV if needed
+          let fileExtension = mime.default.getExtension(mimeType);
+          if (!fileExtension) {
+            fileExtension = 'wav';
+            buffer = convertToWav(inlineData.data, mimeType);
+            console.log(`     🔄 Converted to WAV: ${buffer.length} bytes`);
+          }
+          
+          audioChunks.push(buffer);
+          totalSize += buffer.length;
+          console.log(`     ✅ Added chunk ${audioChunks.length}: ${buffer.length} bytes (total: ${totalSize})`);
+        } else if (part.text) {
+          console.log(`     📝 Found text response: "${part.text.substring(0, 50)}..."`);
+          // This might be text output instead of audio - could indicate an issue
         }
-        
-        audioChunks.push(buffer);
-        totalSize += buffer.length;
       }
     }
+    
+    console.log(`🎵 Streaming complete: ${audioChunks.length} audio chunks, ${totalSize} total bytes`);
 
     if (audioChunks.length === 0) {
       throw new Error('No audio data received from Gemini TTS');
@@ -346,6 +390,12 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
   return new Promise((resolve, reject) => {
     console.log(`🔗 Merging ${audioFiles.length} audio segments...`);
     
+    // Debug: Log file details
+    audioFiles.forEach((file, index) => {
+      const stats = require('fs').statSync(file.filepath);
+      console.log(`   📁 File ${index + 1}: ${file.filepath} (${(stats.size/1024).toFixed(1)}KB, ${file.duration}s)`);
+    });
+    
     if (audioFiles.length === 0) {
       reject(new Error('No audio files to merge'));
       return;
@@ -354,9 +404,12 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
     if (audioFiles.length === 1) {
       // If only one file, just copy it and ensure it's MP3
       const inputPath = audioFiles[0].filepath;
+      console.log(`🔄 Converting single file: ${inputPath}`);
       ffmpeg(inputPath)
         .audioCodec('libmp3lame')
         .audioBitrate('128k')
+        .audioChannels(1)
+        .audioFrequency(22050)
         .output(outputPath)
         .on('end', () => {
           console.log(`✅ Single audio file converted and copied to: ${outputPath}`);
@@ -373,25 +426,43 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
     // Create ffmpeg command to concatenate audio files
     const command = ffmpeg();
     
-    // Add all input files
-    audioFiles.forEach(file => {
+    // Add all input files with detailed logging
+    console.log(`🎵 Adding ${audioFiles.length} input files to FFmpeg:`);
+    audioFiles.forEach((file, index) => {
+      console.log(`   ${index + 1}. ${file.filepath} (Scene: ${file.sceneTitle})`);
       command.input(file.filepath);
     });
+    
+    // Use a different concatenation method that prevents overlap
+    // Instead of using concat filter, use individual inputs with no gaps
+    const filterParts = audioFiles.map((_, index) => `[${index}:a]`).join('');
+    const concatFilter = `${filterParts}concat=n=${audioFiles.length}:v=0:a=1[out]`;
+    
+    console.log(`🔧 FFmpeg filter: ${concatFilter}`);
     
     // Configure output with proper audio normalization
     command
       .outputOptions([
-        '-filter_complex', 
-        `concat=n=${audioFiles.length}:v=0:a=1[out]`,
-        '-map', '[out]'
+        '-filter_complex', concatFilter,
+        '-map', '[out]',
+        '-avoid_negative_ts', 'make_zero', // Avoid timing issues
+        '-fflags', '+genpts' // Generate presentation timestamps
       ])
       .audioCodec('libmp3lame')
       .audioBitrate('128k')
       .audioChannels(1) // Mono output
       .audioFrequency(22050) // Consistent sample rate
+      .format('mp3')
       .output(outputPath)
       .on('start', (commandLine) => {
-        console.log('🎵 FFmpeg started:', commandLine);
+        console.log('🎵 FFmpeg started with command:');
+        console.log(commandLine);
+      })
+      .on('stderr', (stderrLine) => {
+        // Log FFmpeg output for debugging
+        if (stderrLine.includes('Duration:') || stderrLine.includes('time=')) {
+          console.log(`   🔧 FFmpeg: ${stderrLine}`);
+        }
       })
       .on('progress', (progress) => {
         if (progress.percent) {
@@ -399,11 +470,17 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
         }
       })
       .on('end', () => {
-        console.log(`✅ Audio merge completed: ${outputPath}`);
+        // Verify the output file
+        const fs = require('fs');
+        if (fs.existsSync(outputPath)) {
+          const stats = fs.statSync(outputPath);
+          console.log(`✅ Audio merge completed: ${outputPath} (${(stats.size/1024).toFixed(1)}KB)`);
+        }
         resolve(outputPath);
       })
       .on('error', (err) => {
-        console.error('❌ FFmpeg error:', err.message);
+        console.error('❌ FFmpeg error during merge:', err.message);
+        console.error('❌ Full error:', err);
         reject(err);
       })
       .run();

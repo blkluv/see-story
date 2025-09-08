@@ -339,7 +339,7 @@ const regenerateFailedImages = async (story, validation, characters) => {
 };
 
 // Enhanced granular processing with validation and smart regeneration
-const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStoryWithGeneratedContent }) => {
+const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStoryWithGeneratedContent, updateStoryIncremental }) => {
   try {
     const characters = storyData.characters || [];
     const storyOutline = storyData.story?.outline || 'A mysterious adventure begins...';
@@ -359,6 +359,15 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
       currentGeneratedStory = await generateScenesOnly(characters, storyOutline);
       hasChanges = true;
       console.log('✅ Complete story generated');
+      
+      // Save scenes incrementally
+      if (updateStoryIncremental) {
+        await updateStoryIncremental(filepath, {
+          scenes: currentGeneratedStory.scenes,
+          title: currentGeneratedStory.title,
+          summary: currentGeneratedStory.summary
+        }, 'scenes-generated');
+      }
     } else if (validation.emptyScenes.length > 0) {
       console.log(`📝 Found ${validation.emptyScenes.length} empty/invalid scenes - regenerating...`);
       currentGeneratedStory = await regenerateFailedScenes({
@@ -366,6 +375,15 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
         generatedStory: currentGeneratedStory
       }, validation, characters, storyOutline);
       hasChanges = true;
+      
+      // Save regenerated scenes incrementally
+      if (updateStoryIncremental) {
+        await updateStoryIncremental(filepath, {
+          scenes: currentGeneratedStory.scenes,
+          title: currentGeneratedStory.title,
+          summary: currentGeneratedStory.summary
+        }, 'scenes-regenerated');
+      }
     } else {
       console.log(`✅ All ${validation.totalScenes} scenes are valid`);
     }
@@ -396,6 +414,14 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
         };
         
         console.log(`✅ Extracted entities for all scenes (${totalEntities} total)`);
+        
+        // Save entities incrementally
+        if (updateStoryIncremental) {
+          await updateStoryIncremental(filepath, {
+            scenes: currentGeneratedStory.scenes,
+            entityMetadata: currentGeneratedStory.entityMetadata
+          }, 'entities-generated');
+        }
       } else if (validation.entityErrors.length > 0) {
         console.log(`🔧 Found ${validation.entityErrors.length} entity errors - fixing...`);
         currentGeneratedStory = await regenerateFailedEntities({
@@ -403,6 +429,14 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
           generatedStory: currentGeneratedStory
         }, validation, characters);
         hasChanges = true;
+        
+        // Save regenerated entities incrementally
+        if (updateStoryIncremental) {
+          await updateStoryIncremental(filepath, {
+            scenes: currentGeneratedStory.scenes,
+            entityMetadata: currentGeneratedStory.entityMetadata
+          }, 'entities-regenerated');
+        }
       } else {
         console.log(`✅ All scenes have valid entities (${validation.totalEntities} total)`);
       }
@@ -437,6 +471,14 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
         };
         
         console.log(`✅ Generated images for all scenes (${totalSuccessfulImages} total)`);
+        
+        // Save images incrementally
+        if (updateStoryIncremental) {
+          await updateStoryIncremental(filepath, {
+            scenes: currentGeneratedStory.scenes,
+            imageMetadata: currentGeneratedStory.imageMetadata
+          }, 'images-generated');
+        }
       } else if (validation.imageErrors.length > 0) {
         console.log(`🔧 Found ${validation.imageErrors.length} image errors - fixing...`);
         currentGeneratedStory = await regenerateFailedImages({
@@ -444,6 +486,14 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
           generatedStory: currentGeneratedStory
         }, validation, characters);
         hasChanges = true;
+        
+        // Save regenerated images incrementally
+        if (updateStoryIncremental) {
+          await updateStoryIncremental(filepath, {
+            scenes: currentGeneratedStory.scenes,
+            imageMetadata: currentGeneratedStory.imageMetadata
+          }, 'images-regenerated');
+        }
       } else {
         console.log(`✅ All scenes have valid images (${validation.totalImages} total)`);
       }
@@ -480,6 +530,13 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
           const fileSizeKB = audioResult.audioPath ? (fs.existsSync(audioResult.audioPath) ? (fs.statSync(audioResult.audioPath).size / 1024).toFixed(1) : 'N/A') : 'N/A';
           console.log(`   ✅ Audio: Generated for ${currentGeneratedStory.scenes.length} scenes (${fileSizeKB}KB)`);
         }
+        
+        // Save audio incrementally
+        if (updateStoryIncremental) {
+          await updateStoryIncremental(filepath, {
+            audio: currentGeneratedStory.audio
+          }, audioResult.error ? 'audio-failed' : 'audio-generated');
+        }
       } else {
         console.log('   ✅ Audio already exists and is valid');
       }
@@ -494,10 +551,14 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
     
     console.log(`🎯 Story "${storyName}" is ${isPlayable ? '✅ PLAYABLE' : '❌ NOT PLAYABLE'}`);
     
-    // Update the file if there were any changes
+    // Final save if there were any changes (consolidation)
     if (hasChanges) {
-      console.log('💾 Updating story file with new content...');
-      await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
+      console.log('💾 Final consolidation of story file...');
+      if (updateStoryIncremental) {
+        await updateStoryIncremental(filepath, currentGeneratedStory, 'story-complete');
+      } else {
+        await updateStoryWithGeneratedContent(filepath, currentGeneratedStory);
+      }
       console.log('✅ Story file updated successfully');
     } else {
       console.log('✅ All content already complete, no updates needed');
@@ -595,7 +656,8 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
         
         // Use enhanced granular processing
         const hadChanges = await processStoryGranularlyWithCheck(story, filepath, {
-          updateStoryWithGeneratedContent: require('../utils/fileUtils').updateStoryWithGeneratedContent
+          updateStoryWithGeneratedContent: require('../utils/fileUtils').updateStoryWithGeneratedContent,
+          updateStoryIncremental: require('../utils/fileUtils').updateStoryIncremental
         });
         if (hadChanges) {
           processedCount++;

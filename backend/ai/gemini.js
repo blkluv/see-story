@@ -279,50 +279,217 @@ Make sure positions are accurate and JSON is properly formatted.
   }
 };
 
-// Generate image prompts from scene content
+// Generate image prompts and reference data from scene content
 const generateImagePromptFromScene = (sceneContent, sceneTitle, characters) => {
   const characterNames = characters.map(char => char.name).join(', ');
   
+  // Get character images that have valid photo data
+  const charactersWithImages = characters.filter(char => 
+    char.photoData && 
+    char.photoData.base64Data && 
+    !char.photoData.error
+  );
+  
+  // Create character description for prompts
+  let characterDescription = '';
+  if (charactersWithImages.length > 0) {
+    characterDescription = `Use the provided reference images of ${charactersWithImages.map(c => c.name).join(' and ')} as character likenesses. `;
+  }
+  
   // Create two different prompts for variety
   const prompts = [
-    `Create a cinematic still from the scene "${sceneTitle}". Characters: ${characterNames}. Scene: ${sceneContent.substring(0, 300)}... Style: photorealistic, dramatic lighting, wide shot`,
-    `Create an artistic interpretation of "${sceneTitle}". Characters: ${characterNames}. Focus on the key moment from: ${sceneContent.substring(0, 300)}... Style: cinematic, detailed, close-up or medium shot`
+    {
+      text: `${characterDescription}Create a cinematic still from the scene "${sceneTitle}". Characters: ${characterNames}. Scene: ${sceneContent.substring(0, 300)}... Style: photorealistic, dramatic lighting, wide shot. Maintain character appearance from reference images.`,
+      referenceImages: charactersWithImages.map(char => ({
+        name: char.name,
+        data: char.photoData.base64Data,
+        mimeType: char.photoData.mimeType
+      }))
+    },
+    {
+      text: `${characterDescription}Create an artistic interpretation of "${sceneTitle}". Characters: ${characterNames}. Focus on the key moment from: ${sceneContent.substring(0, 300)}... Style: cinematic, detailed, close-up or medium shot. Keep character faces consistent with reference images.`,
+      referenceImages: charactersWithImages.map(char => ({
+        name: char.name,
+        data: char.photoData.base64Data,
+        mimeType: char.photoData.mimeType
+      }))
+    }
   ];
+  
+  console.log(`📷 Found ${charactersWithImages.length} character reference images for scene "${sceneTitle}"`);
   
   return prompts;
 };
 
-// Generate images for a scene using Nano Banana
+// Generate images for a scene using Gemini with character reference images
 const generateSceneImages = async (sceneContent, sceneTitle, characters) => {
   try {
     console.log(`🎨 Generating images for scene: "${sceneTitle}"`);
     
-    const prompts = generateImagePromptFromScene(sceneContent, sceneTitle, characters);
+    const promptData = generateImagePromptFromScene(sceneContent, sceneTitle, characters);
     const images = [];
     
-    for (let i = 0; i < prompts.length; i++) {
+    for (let i = 0; i < promptData.length; i++) {
       try {
         console.log(`   🖼️ Generating image ${i + 1}/2...`);
+        const prompt = promptData[i];
         
-        const imageResult = await genAIImage.generateImage({
-          model: 'gemini-2.5-flash-image-preview',
-          prompt: prompts[i]
+        // Prepare the multi-modal request parts
+        const parts = [
+          {
+            text: prompt.text
+          }
+        ];
+        
+        // Add character reference images if available
+        if (prompt.referenceImages && prompt.referenceImages.length > 0) {
+          console.log(`   📷 Including ${prompt.referenceImages.length} character reference images`);
+          prompt.referenceImages.forEach((refImage, idx) => {
+            parts.push({
+              inlineData: {
+                data: refImage.data,
+                mimeType: refImage.mimeType || 'image/jpeg'
+              }
+            });
+            console.log(`     - Character: ${refImage.name}`);
+          });
+        }
+        
+        // Use Gemini's multimodal model for image generation with references
+        const request = {
+          contents: [{
+            role: 'user',
+            parts: parts
+          }],
+          generationConfig: {
+            temperature: 0.8,
+            topP: 0.95,
+            topK: 40,
+            maxOutputTokens: 1024,
+          }
+        };
+        
+        console.log(`   🤖 Sending request to Gemini with ${parts.length} parts (text + ${parts.length - 1} images)`);
+        
+        // Generate image using the standard Gemini model first to get a description
+        // Then use that description with the image generation model
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const descriptionPrompt = `${prompt.text}\n\nCreate a detailed visual description for an image generation AI, focusing on:
+1. Character appearance (use the reference images provided)
+2. Scene composition and lighting  
+3. Specific visual details from the story
+4. Art style and mood
+
+Respond with just the image generation prompt, no explanation.`;
+        
+        const descriptionResult = await model.generateContent({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: descriptionPrompt },
+              ...parts.slice(1) // Include reference images
+            ]
+          }]
         });
         
-        if (imageResult.image) {
+        const enhancedPrompt = descriptionResult.response.text();
+        console.log(`   📝 Generated enhanced prompt: ${enhancedPrompt.substring(0, 100)}...`);
+        
+        // Generate actual image using Gemini image generation
+        console.log(`   🖼️ Generating image using Gemini 2.5 Flash Image model...`);
+        
+        try {
+          // Try multiple approaches for Gemini image generation
+          let base64Image = null;
+          let mimeType = 'image/png';
+          let generatedWith = 'Unknown';
+          
+          // Approach 1: Try using GoogleGenAI for image generation
+          try {
+            console.log(`   🔄 Attempting Gemini image generation (Method 1)...`);
+            const imageGenerationResponse = await genAIImage.generateContent({
+              model: 'gemini-2.5-flash-image-preview',
+              contents: [{
+                role: 'user', 
+                parts: [{ text: enhancedPrompt }]
+              }],
+              generationConfig: {
+                temperature: 0.8,
+                candidateCount: 1
+              }
+            });
+            
+            if (imageGenerationResponse?.response?.candidates?.[0]?.content?.parts) {
+              for (const part of imageGenerationResponse.response.candidates[0].content.parts) {
+                if (part.inlineData?.data) {
+                  base64Image = part.inlineData.data;
+                  mimeType = part.inlineData.mimeType || 'image/png';
+                  generatedWith = 'GoogleGenAI - Gemini 2.5 Flash Image';
+                  break;
+                }
+              }
+            }
+          } catch (method1Error) {
+            console.log(`   ⚠️ Method 1 failed: ${method1Error.message}`);
+          }
+          
+          // Approach 2: Try using GoogleGenerativeAI with image model
+          if (!base64Image) {
+            try {
+              console.log(`   🔄 Attempting Gemini image generation (Method 2)...`);
+              const imageModel = genAI.getGenerativeModel({ 
+                model: 'gemini-2.5-flash-image-preview'
+              });
+              
+              const imageGenerationResponse = await imageModel.generateContent([enhancedPrompt]);
+              
+              if (imageGenerationResponse?.response?.candidates?.[0]?.content?.parts) {
+                for (const part of imageGenerationResponse.response.candidates[0].content.parts) {
+                  if (part.inlineData?.data) {
+                    base64Image = part.inlineData.data;
+                    mimeType = part.inlineData.mimeType || 'image/png';
+                    generatedWith = 'GoogleGenerativeAI - Gemini 2.5 Flash Image';
+                    break;
+                  }
+                }
+              }
+            } catch (method2Error) {
+              console.log(`   ⚠️ Method 2 failed: ${method2Error.message}`);
+            }
+          }
+          
+          if (base64Image) {
+            images.push({
+              imageNumber: i + 1,
+              prompt: prompt.text,
+              enhancedPrompt: enhancedPrompt,
+              characterReferences: prompt.referenceImages ? prompt.referenceImages.length : 0,
+              imageData: base64Image,
+              base64Data: base64Image,
+              mimeType: mimeType,
+              generatedWith: generatedWith,
+              generatedAt: new Date().toISOString()
+            });
+            console.log(`   ✅ Generated AI image ${i + 1} with ${generatedWith} (${prompt.referenceImages?.length || 0} character references used)`);
+          } else {
+            throw new Error('No image data received from any Gemini API method');
+          }
+        } catch (imageGenerationError) {
+          console.error(`   ❌ Failed to generate AI image ${i + 1}:`, imageGenerationError.message);
+          
+          // Fallback: create a simple colored rectangle as base64
+          const fallbackBase64 = createFallbackImage(sceneTitle);
+          
           images.push({
             imageNumber: i + 1,
-            prompt: prompts[i],
-            imageData: imageResult.image, // This should be base64 data
-            generatedAt: new Date().toISOString()
-          });
-          console.log(`   ✅ Image ${i + 1} generated successfully`);
-        } else {
-          console.log(`   ❌ No image data returned for image ${i + 1}`);
-          images.push({
-            imageNumber: i + 1,
-            prompt: prompts[i],
-            error: 'No image data returned from AI',
+            prompt: prompt.text,
+            enhancedPrompt: enhancedPrompt,
+            characterReferences: prompt.referenceImages ? prompt.referenceImages.length : 0,
+            imageData: fallbackBase64,
+            base64Data: fallbackBase64,
+            mimeType: 'image/png',
+            fallback: true,
+            error: 'Gemini image generation failed: ' + imageGenerationError.message,
             generatedAt: new Date().toISOString()
           });
         }
@@ -330,7 +497,8 @@ const generateSceneImages = async (sceneContent, sceneTitle, characters) => {
         console.error(`   ❌ Error generating image ${i + 1}:`, imageError.message);
         images.push({
           imageNumber: i + 1,
-          prompt: prompts[i],
+          prompt: promptData[i].text,
+          characterReferences: promptData[i].referenceImages ? promptData[i].referenceImages.length : 0,
           error: imageError.message,
           generatedAt: new Date().toISOString()
         });
@@ -338,7 +506,8 @@ const generateSceneImages = async (sceneContent, sceneTitle, characters) => {
     }
     
     const successfulImages = images.filter(img => !img.error);
-    console.log(`✅ Generated ${successfulImages.length}/${prompts.length} images for scene "${sceneTitle}"`);
+    const totalCharacterRefs = images.reduce((sum, img) => sum + (img.characterReferences || 0), 0);
+    console.log(`✅ Generated ${successfulImages.length}/${promptData.length} images for scene "${sceneTitle}" (${totalCharacterRefs} character references used)`);
     
     return images;
   } catch (error) {
@@ -442,6 +611,16 @@ const generateImagesOnly = async (scenes, characters) => {
   }
   
   return scenesWithImages;
+};
+
+// Create a fallback base64 image when Gemini image generation fails
+const createFallbackImage = (sceneTitle) => {
+  // Create a simple 1x1 pixel PNG as base64 (transparent)
+  // This is a minimal valid PNG file
+  const transparentPixelPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  
+  console.log(`   🔄 Created fallback image for scene: "${sceneTitle}"`);
+  return transparentPixelPng;
 };
 
 module.exports = {

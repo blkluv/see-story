@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "concurrently \"nodemon server.js\" \"node story-watcher.js\"",
+    "dev:server": "nodemon server.js",
+    "dev:watcher": "node story-watcher.js"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "^5.8.1",
@@ -20,6 +22,7 @@
     "mime": "^4.0.7"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "concurrently": "^8.2.2"
   }
 }
