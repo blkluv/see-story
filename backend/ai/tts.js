@@ -492,32 +492,31 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
       return;
     }
     
-    // Create ffmpeg command to concatenate audio files
-    const command = ffmpeg();
-    
-    // Add all input files with detailed logging
-    console.log(`🎵 Adding ${audioFiles.length} input files to FFmpeg:`);
+    // Use file-based concatenation method to prevent overlapping
+    console.log(`🎵 Preparing ${audioFiles.length} input files for concatenation:`);
     audioFiles.forEach((file, index) => {
       console.log(`   ${index + 1}. ${file.filepath} (Scene: ${file.sceneTitle})`);
-      command.input(file.filepath);
     });
     
-    // Enhanced concatenation method with gap prevention and normalization
-    const filterParts = audioFiles.map((_, index) => `[${index}:a]`).join('');
+    // Create a temporary concat list file
+    const fs = require('fs');
+    const concatListPath = path.join(path.dirname(outputPath), `concat_list_${Date.now()}.txt`);
     
-    // Use advanced concat filter with audio resampling to ensure consistency
-    const concatFilter = `${filterParts}concat=n=${audioFiles.length}:v=0:a=1:unsafe=0[concat];[concat]aresample=22050[out]`;
+    // Create concat file content
+    const concatContent = audioFiles
+      .map(file => `file '${file.filepath}'`)
+      .join('\n');
     
-    console.log(`🔧 FFmpeg filter: ${concatFilter}`);
+    fs.writeFileSync(concatListPath, concatContent);
+    console.log(`📝 Created concat list: ${concatListPath}`);
+    console.log(`📄 Concat content:\n${concatContent}`);
     
-    // Configure output with enhanced audio processing
-    command
-      .outputOptions([
-        '-filter_complex', concatFilter,
-        '-map', '[out]',
-        '-avoid_negative_ts', 'make_zero', // Avoid timing issues
-        '-fflags', '+genpts', // Generate presentation timestamps
-        '-ac', '1' // Ensure mono output
+    // Create ffmpeg command using file-based concatenation
+    const command = ffmpeg()
+      .input(concatListPath)
+      .inputOptions([
+        '-f', 'concat',
+        '-safe', '0'
       ])
       .audioCodec('libmp3lame')
       .audioBitrate('128k')
@@ -541,8 +540,17 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
         }
       })
       .on('end', () => {
+        // Clean up temporary concat file
+        try {
+          if (fs.existsSync(concatListPath)) {
+            fs.unlinkSync(concatListPath);
+            console.log('🧹 Cleaned up concat list file');
+          }
+        } catch (cleanupError) {
+          console.warn('⚠️ Failed to clean up concat list:', cleanupError.message);
+        }
+        
         // Verify the output file
-        const fs = require('fs');
         if (fs.existsSync(outputPath)) {
           const stats = fs.statSync(outputPath);
           console.log(`✅ Audio merge completed: ${outputPath} (${(stats.size/1024).toFixed(1)}KB)`);
@@ -552,6 +560,16 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
       .on('error', (err) => {
         console.error('❌ FFmpeg error during merge:', err.message);
         console.error('❌ Full error:', err);
+        
+        // Clean up on error too
+        try {
+          if (fs.existsSync(concatListPath)) {
+            fs.unlinkSync(concatListPath);
+          }
+        } catch (cleanupError) {
+          console.warn('⚠️ Failed to clean up concat list on error:', cleanupError.message);
+        }
+        
         reject(err);
       })
       .run();
