@@ -9,6 +9,8 @@ const StoryPlayer = ({ story, onBack }) => {
   const [timeElapsed, setTimeElapsed] = useState(0);
   const [subtitleText, setSubtitleText] = useState('');
   const [subtitleProgress, setSubtitleProgress] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Timing calculations - 10 minutes total (600 seconds)
   const totalDuration = 600; // 10 minutes in seconds
@@ -17,48 +19,34 @@ const StoryPlayer = ({ story, onBack }) => {
   const sceneBaseDuration = totalDuration / sceneCount; // Base time per scene
   
   const currentScene = scenes[currentSceneIndex];
-  const currentImages = currentScene?.images?.filter(img => !img.error) || [];
-  const imageTransitionTime = currentImages.length > 0 ? sceneBaseDuration / (currentImages.length * 2) : sceneBaseDuration / 2;
+  const currentImages = currentScene?.images?.filter(img => !img.error && img.base64Data) || [];
+  const imageTransitionTime = currentImages.length > 1 ? sceneBaseDuration / (currentImages.length * 2) : sceneBaseDuration;
 
   // Text scrolling setup
   const currentText = currentScene?.content || '';
-  const wordsPerSecond = 2.5; // Reading speed
-  const textDuration = Math.max(currentText.length / (wordsPerSecond * 5), sceneBaseDuration * 0.8);
+  const wordsPerSecond = 3; // Reading speed (words per second)
+  const textDuration = Math.max(currentText.split(' ').length / wordsPerSecond, sceneBaseDuration * 0.9);
+
+  // Initialize subtitle text when scene changes
+  useEffect(() => {
+    if (currentScene?.content) {
+      setSubtitleText(currentScene.content);
+      console.log(`Scene ${currentSceneIndex + 1}: "${currentScene.title}"`);
+      console.log(`- Scene duration: ${sceneBaseDuration.toFixed(1)}s`);
+      console.log(`- Images: ${currentImages.length}`);
+      console.log(`- Image transition time: ${imageTransitionTime.toFixed(1)}s`);
+      console.log(`- Text: ${currentText.substring(0, 100)}...`);
+    }
+  }, [currentSceneIndex, currentScene?.content, currentScene?.title, sceneBaseDuration, currentImages.length, imageTransitionTime, currentText]);
 
   useEffect(() => {
     let interval;
     if (isPlaying) {
       interval = setInterval(() => {
         setTimeElapsed(prev => {
-          const newTime = prev + 0.1;
+          const newTime = prev + (0.1 * playbackSpeed);
           const newProgress = (newTime / totalDuration) * 100;
           setProgress(newProgress);
-
-          // Calculate which scene we should be on
-          const targetSceneIndex = Math.floor(newTime / sceneBaseDuration);
-          if (targetSceneIndex !== currentSceneIndex && targetSceneIndex < sceneCount) {
-            setCurrentSceneIndex(targetSceneIndex);
-            setCurrentImageIndex(0);
-            setSubtitleProgress(0);
-          }
-
-          // Handle image transitions within scene
-          const sceneElapsedTime = newTime - (currentSceneIndex * sceneBaseDuration);
-          if (currentImages.length > 1) {
-            const targetImageIndex = Math.floor(sceneElapsedTime / imageTransitionTime) % currentImages.length;
-            if (targetImageIndex !== currentImageIndex) {
-              setCurrentImageIndex(targetImageIndex);
-            }
-          }
-
-          // Handle subtitle scrolling
-          const subtitleElapsed = sceneElapsedTime;
-          const subtitleProgressPercent = Math.min((subtitleElapsed / textDuration) * 100, 100);
-          setSubtitleProgress(subtitleProgressPercent);
-          
-          // Calculate visible text
-          const charactersToShow = Math.floor((subtitleProgressPercent / 100) * currentText.length);
-          setSubtitleText(currentText.substring(0, charactersToShow));
 
           // Auto-stop at end
           if (newTime >= totalDuration) {
@@ -71,10 +59,59 @@ const StoryPlayer = ({ story, onBack }) => {
       }, 100);
     }
     return () => clearInterval(interval);
-  }, [isPlaying, currentSceneIndex, sceneBaseDuration, totalDuration, sceneCount, currentImages.length, imageTransitionTime, currentText, textDuration]);
+  }, [isPlaying, totalDuration, playbackSpeed]);
+
+  // Separate useEffect for scene and image transitions based on time
+  useEffect(() => {
+    // Calculate which scene we should be on
+    const targetSceneIndex = Math.floor(timeElapsed / sceneBaseDuration);
+    if (targetSceneIndex !== currentSceneIndex && targetSceneIndex < sceneCount) {
+      console.log(`Switching from scene ${currentSceneIndex + 1} to scene ${targetSceneIndex + 1}`);
+      setCurrentSceneIndex(targetSceneIndex);
+      setCurrentImageIndex(0);
+      setSubtitleProgress(0);
+    }
+
+    // Handle image transitions within scene
+    const sceneElapsedTime = timeElapsed - (currentSceneIndex * sceneBaseDuration);
+    if (currentImages.length > 1) {
+      const targetImageIndex = Math.floor(sceneElapsedTime / imageTransitionTime) % currentImages.length;
+      if (targetImageIndex !== currentImageIndex) {
+        console.log(`Scene ${currentSceneIndex + 1}: Switching from image ${currentImageIndex + 1} to image ${targetImageIndex + 1}`);
+        setCurrentImageIndex(targetImageIndex);
+      }
+    }
+  }, [timeElapsed, sceneBaseDuration, currentSceneIndex, sceneCount, currentImages.length, imageTransitionTime, currentImageIndex]);
 
   const handlePlayPause = () => {
     setIsPlaying(!isPlaying);
+  };
+
+  const handleSpeedChange = () => {
+    setPlaybackSpeed(prev => prev === 1 ? 2 : prev === 2 ? 0.5 : 1);
+  };
+
+  const handleFullscreen = () => {
+    if (!isFullscreen) {
+      const element = document.documentElement;
+      if (element.requestFullscreen) {
+        element.requestFullscreen();
+      } else if (element.webkitRequestFullscreen) {
+        element.webkitRequestFullscreen();
+      } else if (element.mozRequestFullScreen) {
+        element.mozRequestFullScreen();
+      }
+      setIsFullscreen(true);
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+      } else if (document.mozCancelFullScreen) {
+        document.mozCancelFullScreen();
+      }
+      setIsFullscreen(false);
+    }
   };
 
   const handleProgressClick = (e) => {
@@ -125,10 +162,20 @@ const StoryPlayer = ({ story, onBack }) => {
 
   const getCurrentImage = () => {
     if (currentImages.length === 0) {
+      console.log(`Scene ${currentSceneIndex + 1}: No images available, using fallback`);
       // Fallback image
       return 'https://picsum.photos/1280/720?random=' + currentSceneIndex;
     }
-    return `data:${currentImages[currentImageIndex]?.mimeType || 'image/png'};base64,${currentImages[currentImageIndex]?.base64Data}`;
+    
+    const image = currentImages[currentImageIndex];
+    console.log(`Scene ${currentSceneIndex + 1}: Image ${currentImageIndex + 1}/${currentImages.length} (${image?.type})`);
+    
+    if (!image?.base64Data) {
+      console.log('No base64Data found, using fallback');
+      return 'https://picsum.photos/1280/720?random=' + currentSceneIndex;
+    }
+    
+    return `data:${image.mimeType || 'image/png'};base64,${image.base64Data}`;
   };
 
   if (!story || !scenes.length) {
@@ -145,6 +192,10 @@ const StoryPlayer = ({ story, onBack }) => {
 
   return (
     <div className="story-player">
+      <button onClick={onBack} className="back-button">
+        <span className="icon">←</span> Back to Stories
+      </button>
+      
       <div className="video-container">
         <div className="video-viewport">
           <img 
@@ -163,8 +214,7 @@ const StoryPlayer = ({ story, onBack }) => {
 
           <div className="subtitles">
             <div className="subtitle-text">
-              {subtitleText}
-              {subtitleProgress < 100 && <span className="cursor">|</span>}
+              {subtitleText || currentScene?.content || 'Scene content loading...'}
             </div>
           </div>
         </div>
@@ -196,8 +246,12 @@ const StoryPlayer = ({ story, onBack }) => {
           </div>
 
           <div className="secondary-controls">
-            <button onClick={onBack} className="control-btn back-btn">
-              <span className="icon">←</span> Back
+            <button onClick={handleSpeedChange} className="control-btn speed-btn">
+              <span className="icon">{playbackSpeed}x</span>
+            </button>
+            
+            <button onClick={handleFullscreen} className="control-btn fullscreen-btn">
+              <span className="icon">{isFullscreen ? '⛶' : '⛶'}</span>
             </button>
           </div>
         </div>

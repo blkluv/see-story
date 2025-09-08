@@ -86,7 +86,7 @@ function App() {
 
   return (
     <div className="app">
-      <Header onCreateClick={handleNavigation} currentView={currentView} />
+      {currentView !== 'player' && <Header onCreateClick={handleNavigation} currentView={currentView} />}
       {renderContent()}
     </div>
   );
