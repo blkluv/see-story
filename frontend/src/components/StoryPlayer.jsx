@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './StoryPlayer.css';
 
 const StoryPlayer = ({ story, onBack }) => {
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true); // Auto-start playing
   const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -13,13 +13,27 @@ const StoryPlayer = ({ story, onBack }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+  const [hasAutoStarted, setHasAutoStarted] = useState(false); // Track auto-start
+  const [showAutoStartMessage, setShowAutoStartMessage] = useState(false); // Show auto-start indicator
   const audioRef = useRef(null);
 
-  // Timing calculations - 10 minutes total (600 seconds)
-  const totalDuration = 600; // 10 minutes in seconds
+  // Timing calculations - use actual audio duration or fallback to 10 minutes
+  const audioMetadata = story?.generatedStory?.audio;
+  const actualAudioDuration = audioMetadata?.duration;
+  const totalDuration = actualAudioDuration || 600; // Use actual audio duration or fallback to 10 minutes
   const scenes = story?.generatedStory?.scenes || [];
   const sceneCount = scenes.length;
-  const sceneBaseDuration = totalDuration / sceneCount; // 60 seconds per scene
+  const sceneBaseDuration = totalDuration / sceneCount; // Dynamic duration per scene based on actual audio
+  
+  // Log timing info for debugging
+  React.useEffect(() => {
+    if (actualAudioDuration) {
+      console.log(`🎬 Using actual audio duration: ${actualAudioDuration}s (${Math.round(actualAudioDuration/60*10)/10}min)`);
+      console.log(`📊 ${sceneCount} scenes, ${Math.round(sceneBaseDuration*10)/10}s per scene`);
+    } else {
+      console.log(`⚠️ No audio duration found, using fallback: ${totalDuration}s`);
+    }
+  }, [actualAudioDuration, totalDuration, sceneCount, sceneBaseDuration]);
   
   const currentScene = scenes[currentSceneIndex];
   const currentImages = currentScene?.images?.filter(img => !img.error && img.base64Data) || [];
@@ -38,6 +52,57 @@ const StoryPlayer = ({ story, onBack }) => {
     }
   }, [currentSceneIndex]);
 
+  // Auto-start playback when component mounts
+  useEffect(() => {
+    if (!hasAutoStarted && story?.generatedStory?.scenes?.length > 0) {
+      console.log('🎬 Auto-starting video playback...');
+      
+      const startPlayback = () => {
+        // Show auto-start message
+        setShowAutoStartMessage(true);
+        
+        // Set the flag to prevent re-triggering
+        setHasAutoStarted(true);
+        
+        // Start audio playback if available
+        if (audioRef.current && story?.generatedStory?.audio?.audioBase64) {
+          audioRef.current.currentTime = 0;
+          audioRef.current.play().then(() => {
+            console.log('🎵 Audio auto-started successfully');
+          }).catch(error => {
+            console.warn('⚠️ Audio auto-play failed (browser policy):', error.message);
+            console.log('💡 User will need to click play to start audio (visual will continue)');
+            // Visual continues playing even if audio auto-play fails
+          });
+        } else {
+          console.log('🎞️ No audio available, starting visual-only playback');
+        }
+        
+        // Hide auto-start message after 2 seconds
+        setTimeout(() => {
+          setShowAutoStartMessage(false);
+        }, 2000);
+      };
+
+      // Small delay to ensure smooth loading, then start
+      const autoStartTimer = setTimeout(() => {
+        if (audioRef.current && story?.generatedStory?.audio?.audioBase64) {
+          // Try to start immediately, or wait for audio to load
+          if (audioRef.current.readyState >= 1) {
+            startPlayback();
+          } else {
+            audioRef.current.addEventListener('canplay', startPlayback, { once: true });
+          }
+        } else {
+          // No audio, just start visual playback
+          startPlayback();
+        }
+      }, 500); // 500ms delay for smooth experience
+
+      return () => clearTimeout(autoStartTimer);
+    }
+  }, [hasAutoStarted, story?.generatedStory?.scenes?.length, story?.generatedStory?.audio?.audioBase64]);
+
   // Initialize and sync audio
   useEffect(() => {
     if (audioRef.current && story?.generatedStory?.audio?.audioBase64) {
@@ -47,19 +112,34 @@ const StoryPlayer = ({ story, onBack }) => {
       audio.volume = isMuted ? 0 : volume;
       audio.playbackRate = playbackSpeed;
       
-      // Sync audio time with visual timeline
-      const audioCurrentTime = (timeElapsed / totalDuration) * (audio.duration || totalDuration);
-      if (Math.abs(audio.currentTime - audioCurrentTime) > 1) {
-        audio.currentTime = audioCurrentTime;
+      // Wait for audio metadata to load before syncing
+      const syncAudioTime = () => {
+        if (audio.duration && !isNaN(audio.duration)) {
+          // Use actual audio duration for sync calculation
+          const audioCurrentTime = (timeElapsed / totalDuration) * audio.duration;
+          if (Math.abs(audio.currentTime - audioCurrentTime) > 1) {
+            console.log(`🔄 Syncing audio: visual=${timeElapsed.toFixed(1)}s, audio=${audioCurrentTime.toFixed(1)}s`);
+            audio.currentTime = audioCurrentTime;
+          }
+        }
+      };
+      
+      // Sync immediately if metadata is already loaded
+      if (audio.readyState >= 1) {
+        syncAudioTime();
+      } else {
+        // Wait for metadata to load
+        audio.addEventListener('loadedmetadata', syncAudioTime, { once: true });
       }
     }
   }, [story, volume, isMuted, playbackSpeed, timeElapsed, totalDuration]);
 
   // Sync audio when progress is manually changed
   useEffect(() => {
-    if (audioRef.current && audioRef.current.duration) {
+    if (audioRef.current && audioRef.current.duration && !isNaN(audioRef.current.duration)) {
       const targetTime = (timeElapsed / totalDuration) * audioRef.current.duration;
       if (Math.abs(audioRef.current.currentTime - targetTime) > 0.5) {
+        console.log(`🎯 Manual sync: seeking to ${targetTime.toFixed(1)}s`);
         audioRef.current.currentTime = targetTime;
       }
     }
@@ -287,9 +367,46 @@ const StoryPlayer = ({ story, onBack }) => {
           
           <div className="image-transition-overlay" />
           
+          {/* Auto-start indicator */}
+          {showAutoStartMessage && (
+            <div className="auto-start-overlay" style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              background: 'rgba(0, 0, 0, 0.8)',
+              color: 'white',
+              padding: '16px 24px',
+              borderRadius: '8px',
+              fontSize: '1.1em',
+              fontWeight: '500',
+              zIndex: 1000,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              animation: 'fadeInOut 2s ease-in-out forwards'
+            }}>
+              <span style={{ fontSize: '1.2em' }}>▶️</span>
+              <span>Auto-starting story...</span>
+            </div>
+          )}
+          
           <div className="scene-info">
             <h3 className="scene-title">{currentScene?.title}</h3>
-            <span className="scene-number">{currentSceneIndex + 1} / {sceneCount}</span>
+            <div className="scene-timing-info" style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              fontSize: '0.9em',
+              opacity: 0.9
+            }}>
+              <span className="scene-number">{currentSceneIndex + 1} / {sceneCount}</span>
+              {actualAudioDuration && (
+                <span className="scene-duration" style={{ fontSize: '0.8em', color: '#888' }}>
+                  ~{Math.round(sceneBaseDuration)}s each
+                </span>
+              )}
+            </div>
           </div>
 
 
@@ -376,6 +493,24 @@ const StoryPlayer = ({ story, onBack }) => {
           {story.characters?.map(char => char.name).join(' & ') || 'Untitled Story'}
         </h2>
         <p className="story-outline">{story.story?.outline}</p>
+        
+        {/* Audio sync status indicator */}
+        <div className="audio-status" style={{ 
+          fontSize: '0.8em', 
+          color: actualAudioDuration ? '#4CAF50' : '#FF9800',
+          marginTop: '8px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px'
+        }}>
+          <span>{actualAudioDuration ? '🎵' : '⚠️'}</span>
+          <span>
+            {actualAudioDuration 
+              ? `Synced to ${Math.round(actualAudioDuration/60*10)/10}min ${audioMetadata.model || 'TTS'} audio`
+              : `Using ${Math.round(totalDuration/60)}min fallback timing`
+            }
+          </span>
+        </div>
       </div>
     </div>
   );
