@@ -1,166 +1,288 @@
-# SeeStory - Netflix-like Interface
+# SeeStory - AI-Powered Interactive Storytelling Platform
 
-A Netflix-inspired web application with a modern interface featuring a hero section and horizontally scrolling content categories.
+A Netflix-inspired multimedia storytelling platform that generates complete interactive stories with AI-generated scenes, images, and audio narration.
 
-## Features
+## 🎬 What SeeStory Does
 
-- **Featured Section**: Auto-rotating hero banner with 10 featured items (includes real user stories!)
-- **30 Categories**: Each containing 30 scrollable items
-- **Netflix-like UI**: Dark theme, smooth transitions, and responsive design
-- **Story Creation**: Multi-character story creation with image embedding
-- **AI Story Generation**: Automatic full story generation using Google Gemini AI
-- **File Watcher**: Background processing that auto-generates stories from outlines
-- **Responsive Design**: Works on desktop and mobile devices
+SeeStory transforms simple character outlines into rich, multimedia stories with:
 
-## Tech Stack
+- **📖 Full Story Generation**: AI creates complete 10-scene narratives from character descriptions
+- **🖼️ Scene Images**: Automatically generated images for each story scene using character likenesses
+- **🎵 Audio Narration**: High-quality text-to-speech audio for complete story playback
+- **🎭 Entity Extraction**: Intelligent extraction of characters, objects, locations, and emotions
+- **🎮 Interactive Player**: Netflix-style interface with full audio controls and scene navigation
+- **🔄 Smart Processing**: Background file watching with automatic content generation
+- **⚡ Regeneration Controls**: Force complete story regeneration when needed
 
-- **Frontend**: React 18 with Vite
-- **Backend**: Express.js with CORS
-- **Styling**: Pure CSS with Netflix-inspired design
-- **Data**: Mock API with randomly generated content
+## 🎯 Core Features
 
-## Quick Start
+### Story Creation & AI Generation
+- **Multi-character story creation** with photo upload and character descriptions
+- **Google Gemini AI integration** for intelligent story generation
+- **Structured 10-scene format** with coherent narrative flow
+- **Background processing** that doesn't block the main interface
 
-### Option 1: Run Both Frontend and Backend Together
+### Multimedia Content Generation
+- **Scene-by-scene image generation** using character reference images
+- **High-quality audio narration** with Gemini TTS (voice: Enceladus)
+- **Entity extraction** for characters, locations, objects, actions, emotions, and concepts
+- **Audio concatenation** with overlap prevention for seamless playback
+
+### Interactive Story Player
+- **Netflix-style interface** with featured stories and categories
+- **Full audio controls** with play/pause, seek, and scene navigation
+- **Visual scene display** with synchronized images and audio
+- **Story regeneration controls** for content refresh
+
+### Advanced Processing System
+- **File-watching service** for automatic story processing
+- **Incremental updates** that preserve existing content
+- **Story validation** with completeness checking
+- **Separate server and watcher processes** for optimal performance
+
+## 🛠️ Tech Stack
+
+### Frontend
+- **React 18** with Vite for fast development
+- **Modern CSS** with Netflix-inspired dark theme
+- **Responsive design** for desktop and mobile
+- **Audio controls** with custom player interface
+
+### Backend
+- **Node.js & Express** RESTful API server
+- **Google Gemini AI** for story and image generation
+- **Gemini TTS** for high-quality audio narration
+- **FFmpeg** for audio processing and concatenation
+- **Chokidar** file watcher for background processing
+
+### Processing Pipeline
+- **Story validation** and completeness checking
+- **Multi-stage content generation** (scenes → entities → images → audio)
+- **File-based audio concatenation** for seamless playback
+- **Automatic cleanup** of temporary files
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Node.js 16+ 
+- FFmpeg (for audio processing)
+- Google Gemini API key
+
+### Installation
+
 ```bash
-# Install dependencies for both frontend and backend
+# Clone the repository
+git clone <repository-url>
+cd see-story
+
+# Install all dependencies (frontend + backend)
 npm run install-all
 
-# Set up AI Story Generation (optional)
-export GEMINI_API_KEY="your-actual-api-key-here"
-
-# Start both servers concurrently
-npm run dev
-```
-
-### Option 2: Run Separately
-```bash
-# Terminal 1 - Backend (runs on http://localhost:5000)
+# Set up environment variables
 cd backend
-npm install
+cp env.template .env
+# Edit .env and add your GEMINI_API_KEY
+```
 
-# Set up AI Story Generation (optional)
-export GEMINI_API_KEY="your-actual-api-key-here"
+### Running the Application
 
+```bash
+# Start both backend server and story watcher
+cd backend
 npm run dev
 
-# Terminal 2 - Frontend (runs on http://localhost:3000)
-cd frontend
-npm install
+# In a new terminal, start the frontend
+cd frontend  
 npm run dev
 ```
 
-## AI Story Generation Setup
+This will start:
+- **Backend API server** on `http://localhost:5000`
+- **Story watcher service** for background processing  
+- **Frontend interface** on `http://localhost:3000`
 
-To enable automatic story generation, you'll need a Google Gemini API key:
+## 🔧 Configuration
+
+### Environment Variables
+
+Create `backend/.env` with:
+
+```bash
+# Required: Google Gemini API Key
+GEMINI_API_KEY=your-actual-gemini-api-key-here
+
+# Optional: TTS Configuration
+GEMINI_TTS_MODEL=gemini-2.5-pro-preview-tts
+GEMINI_TTS_VOICE=Enceladus
+GEMINI_TTS_TEMPERATURE=0.7
+
+# Optional: Processing Settings
+TEST_MODE=false
+PROCESSING_ENABLED=true
+```
+
+### Getting a Gemini API Key
 
 1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
 2. Create a new API key
-3. Copy the environment template file:
-   ```bash
-   cd backend
-   cp env.template .env
-   ```
-4. Edit the `.env` file and replace `your-actual-gemini-api-key-here` with your actual API key:
-   ```bash
-   GEMINI_API_KEY=AIzaSyYourActualAPIKeyHere
-   ```
-5. Restart your server
+3. Copy it to your `.env` file
+4. Restart the backend server
 
-**Alternative**: Set the environment variable directly:
-```bash
-export GEMINI_API_KEY="your-actual-api-key-here"
-```
-
-Once configured, the system will automatically:
-- Watch for new story submissions
-- Generate complete 10-scene stories based on character outlines
-- Save the generated stories back to the JSON files
-- Display enhanced stories in the featured section
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 see-story/
 ├── backend/
-│   ├── server.js          # Express API server
-│   └── package.json       # Backend dependencies
+│   ├── server.js                 # Main API server
+│   ├── story-watcher.js          # Background file watcher
+│   ├── nodemon.json             # Development configuration
+│   ├── ai/
+│   │   ├── gemini.js            # Story & image generation
+│   │   └── tts.js               # Audio generation & processing
+│   ├── processing/
+│   │   └── storyProcessor.js    # Story validation & processing
+│   ├── utils/
+│   │   └── fileUtils.js         # File operations & storage
+│   ├── config/
+│   │   └── constants.js         # App configuration
+│   ├── stories/                 # Generated story files
+│   └── audio_backend/           # Generated audio files
 ├── frontend/
 │   ├── src/
-│   │   ├── components/     # React components
+│   │   ├── components/
 │   │   │   ├── Header.jsx
 │   │   │   ├── FeaturedSection.jsx
 │   │   │   ├── CategoriesSection.jsx
-│   │   │   ├── CategoryRow.jsx
-│   │   │   └── ItemCard.jsx
-│   │   ├── App.jsx        # Main React component
-│   │   ├── main.jsx       # React entry point
-│   │   ├── index.css      # Global styles
-│   │   └── App.css        # App-specific styles
-│   ├── index.html         # HTML template
-│   ├── vite.config.js     # Vite configuration
-│   └── package.json       # Frontend dependencies
-└── package.json           # Root package.json with scripts
+│   │   │   ├── CreateStoryForm.jsx
+│   │   │   ├── StoryPlayer.jsx
+│   │   │   └── RegenerationControl.jsx
+│   │   ├── App.jsx
+│   │   └── main.jsx
+│   └── index.html
+└── package.json                 # Root package with dev scripts
 ```
 
-## API Endpoints
+## 🔄 How Story Generation Works
 
-- `GET /api/featured` - Returns 10 featured items for the hero section
-- `GET /api/categories` - Returns all 30 categories with their items
-- `GET /api/category/:id` - Returns a specific category by ID
-- `GET /api/health` - Health check endpoint
+1. **Story Creation**: User creates story with characters and photos
+2. **File Detection**: Story watcher detects new story file
+3. **Story Processing**: AI generates 10 coherent scenes
+4. **Entity Extraction**: Extracts characters, objects, locations from each scene
+5. **Image Generation**: Creates scene-specific images using character likenesses  
+6. **Audio Generation**: Converts each scene to high-quality speech
+7. **Audio Concatenation**: Merges scene audio into single playback file
+8. **Story Completion**: Marks story as ready for interactive playback
 
-## Features Implemented
+## 🎮 Using the Story Player
 
-✅ **Enhanced Featured Hero Section**
-- Auto-rotating carousel with 10 items (real stories + mock data)
-- Uses actual user-created stories when available
-- Large backdrop images with character names as titles
-- Story outlines as descriptions
+1. **Browse Stories**: View featured stories in the Netflix-style interface
+2. **Select Story**: Click on any story to open the player
+3. **Audio Controls**: Play, pause, seek through the complete narration
+4. **Scene Navigation**: See current scene with synchronized images
+5. **Story Information**: View characters, descriptions, and metadata
+6. **Regeneration**: Use controls to force complete story regeneration
 
-✅ **Multi-Character Story Creation**
-- Add multiple characters with individual photos
-- Dynamic form with add/remove character functionality
-- Image download and base64 embedding
-- Rich JSON storage format
+## 🔧 API Endpoints
 
-✅ **AI Story Generation**
-- Automatic file watching for new story submissions
-- Google Gemini AI integration for story generation
-- 10-scene structured story format
-- Background processing without blocking main server
+### Core Endpoints
+- `GET /api/featured` - Featured stories for homepage
+- `GET /api/categories` - All story categories
+- `GET /api/stories` - All available stories
+- `POST /api/stories` - Create new story
 
-✅ **Category Rows**
-- 30 different categories
-- 30 items per category
-- Horizontal scrolling with arrow navigation
-- Hover effects and smooth animations
+### Story Management  
+- `GET /api/stories/:id` - Get specific story details
+- `PUT /api/stories/:id/regenerate` - Toggle regeneration flag
+- `GET /api/audio/:storyId` - Stream story audio
 
-✅ **Netflix-like Styling**
-- Dark theme with Netflix color scheme
-- Responsive design for all screen sizes
-- Smooth hover effects and transitions
-- Custom scrollbars
+### Utility Endpoints
+- `GET /api/health` - Server health check
+- `GET /api/status` - Processing status
 
-✅ **Enhanced API Backend**
-- RESTful endpoints with story creation
-- File-based storage with automatic directory creation
-- Image processing and base64 conversion
-- Error handling and comprehensive logging
+## 🎨 Customization
 
-## Customization
+### Styling
+- Edit `frontend/src/index.css` for global styles
+- Modify `frontend/src/App.css` for component-specific styles
+- Netflix dark theme with customizable colors
 
-- **Images**: Uses Picsum Photos for placeholder images. Replace URLs in `backend/server.js` with your own image sources
-- **Categories**: Modify the `categoryNames` array in `server.js` to change category names
-- **Styling**: Edit `frontend/src/index.css` to customize the look and feel
-- **Data**: Update the mock data generators in `server.js` to match your content structure
+### AI Configuration
+- Adjust story generation prompts in `backend/ai/gemini.js`
+- Configure TTS settings in `backend/ai/tts.js`
+- Modify processing pipeline in `backend/processing/storyProcessor.js`
 
-## Development
+### Audio Settings
+- Change TTS voice and model in environment variables
+- Adjust audio quality settings in TTS configuration
+- Modify concatenation method in audio processing
 
-The project uses:
-- **Vite** for fast frontend development with hot reload
-- **Nodemon** for automatic backend restart on changes
-- **Concurrently** to run both servers simultaneously
-- **React 18** with modern hooks and functional components
+## 🛠️ Development
 
-Enjoy your Netflix-like storytelling platform! 🎬
+### Development Commands
+```bash
+# Backend development (with auto-restart)
+cd backend && npm run dev
+
+# Frontend development (with hot reload)  
+cd frontend && npm run dev
+
+# Install all dependencies
+npm run install-all
+
+# Backend only
+cd backend && npm run dev:server
+
+# Story watcher only  
+cd backend && npm run dev:watcher
+```
+
+### Development Features
+- **Nodemon** auto-restart for backend changes
+- **File watching** excluded from server restarts
+- **Hot reload** for frontend development
+- **Background processing** for story generation
+- **Comprehensive logging** for debugging
+
+## 🎯 Story Quality Features
+
+- **Coherent narratives** with character consistency
+- **High-quality images** using character reference photos
+- **Professional audio** with natural speech synthesis
+- **Rich metadata** with extracted story elements
+- **Validation system** ensuring complete story generation
+- **Incremental processing** for efficient updates
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**Stories not generating:**
+- Check Gemini API key in `.env` file
+- Verify internet connection
+- Check backend logs for API errors
+
+**Audio playback issues:**
+- Ensure FFmpeg is installed and in PATH
+- Check audio file permissions
+- Verify story has completed processing
+
+**Frontend not connecting:**
+- Confirm backend is running on port 5000
+- Check for CORS configuration
+- Verify API endpoint URLs
+
+## 🎉 What Makes SeeStory Special
+
+- **Complete automation** from character outline to playable story
+- **Multimedia experience** with synchronized audio, images, and text
+- **Professional quality** AI-generated content 
+- **Netflix-style interface** for familiar user experience
+- **Background processing** that doesn't interrupt user experience
+- **Regeneration controls** for content refresh and experimentation
+- **Modular architecture** for easy customization and extension
+
+---
+
+**Experience the future of interactive storytelling!** 🎬✨
+
+Transform simple character ideas into rich, multimedia stories with professional narration, beautiful images, and engaging narratives - all powered by cutting-edge AI technology.
