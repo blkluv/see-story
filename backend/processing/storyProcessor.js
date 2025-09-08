@@ -116,7 +116,7 @@ const validateStoryCompleteness = (story) => {
     validation.hasImages = validation.totalImages > 0;
   }
 
-  // Check audio
+  // Check audio (both JSON data and actual file)
   if (generatedStory.audio) {
     if (generatedStory.audio.error) {
       validation.audioErrors.push({
@@ -125,11 +125,33 @@ const validateStoryCompleteness = (story) => {
       });
       validation.audioStatus = 'error';
     } else if (generatedStory.audio.audioBase64 && generatedStory.audio.audioBase64.length > 0) {
-      validation.hasAudio = true;
-      if (generatedStory.audio.placeholder) {
-        validation.audioStatus = 'placeholder';
+      // Check if the actual audio file exists
+      const audioPath = generatedStory.audio.audioPath;
+      if (audioPath && fs.existsSync(audioPath)) {
+        // Check if the file has proper size (should be more than 100kb for 10 minutes)
+        const stats = fs.statSync(audioPath);
+        const fileSizeKB = stats.size / 1024;
+        
+        if (fileSizeKB < 50) { // Less than 50kb indicates incomplete audio
+          validation.audioErrors.push({
+            error: `Audio file too small: ${fileSizeKB.toFixed(1)}KB (expected >50KB)`,
+            filePath: audioPath
+          });
+          validation.audioStatus = 'incomplete';
+        } else {
+          validation.hasAudio = true;
+          if (generatedStory.audio.placeholder) {
+            validation.audioStatus = 'placeholder';
+          } else {
+            validation.audioStatus = 'complete';
+          }
+        }
       } else {
-        validation.audioStatus = 'complete';
+        validation.audioErrors.push({
+          error: 'Audio file missing from disk',
+          expectedPath: audioPath
+        });
+        validation.audioStatus = 'file_missing';
       }
     } else {
       validation.audioStatus = 'empty';
@@ -145,6 +167,10 @@ const validateStoryCompleteness = (story) => {
   console.log(`   🖼️ Images: ${validation.totalImages} total`);
   if (validation.audioStatus === 'placeholder') {
     console.log(`   🎵 Audio: ${validation.audioStatus} (silent audio - TTS not yet available)`);
+  } else if (validation.audioStatus === 'incomplete') {
+    console.log(`   🎵 Audio: ${validation.audioStatus} (file too small)`);
+  } else if (validation.audioStatus === 'file_missing') {
+    console.log(`   🎵 Audio: ${validation.audioStatus} (file deleted from disk)`);
   } else {
     console.log(`   🎵 Audio: ${validation.audioStatus}`);
   }
@@ -423,10 +449,23 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
       }
     }
     
-    // Step 4: Handle audio (generate if missing or fix errors)
+    // Step 4: Handle audio (generate if missing, incomplete, or fix errors)
     if (currentGeneratedStory.scenes && currentGeneratedStory.scenes.length > 0) {
-      if (!validation.hasAudio || validation.audioStatus === 'missing' || validation.audioStatus === 'error') {
-        console.log('🎵 Audio missing or has errors - generating complete story audio...');
+      const needsAudioRegeneration = !validation.hasAudio || 
+                                    validation.audioStatus === 'missing' || 
+                                    validation.audioStatus === 'error' ||
+                                    validation.audioStatus === 'file_missing' ||
+                                    validation.audioStatus === 'incomplete' ||
+                                    validation.audioStatus === 'empty';
+      
+      if (needsAudioRegeneration) {
+        console.log(`🎵 Audio needs regeneration (status: ${validation.audioStatus}) - generating complete story audio...`);
+        
+        if (validation.audioErrors.length > 0) {
+          validation.audioErrors.forEach(audioError => {
+            console.log(`   🚨 Audio issue: ${audioError.error}`);
+          });
+        }
         
         // Extract story ID from the file path for audio generation
         const storyId = path.basename(filepath, '.json').replace('story_', '');
@@ -438,7 +477,8 @@ const processStoryGranularlyWithCheck = async (storyData, filepath, { updateStor
         if (audioResult.error) {
           console.log(`   ❌ Audio generation failed: ${audioResult.error}`);
         } else {
-          console.log(`   ✅ Audio: Generated for ${currentGeneratedStory.scenes.length} scenes`);
+          const fileSizeKB = audioResult.audioPath ? (fs.existsSync(audioResult.audioPath) ? (fs.statSync(audioResult.audioPath).size / 1024).toFixed(1) : 'N/A') : 'N/A';
+          console.log(`   ✅ Audio: Generated for ${currentGeneratedStory.scenes.length} scenes (${fileSizeKB}KB)`);
         }
       } else {
         console.log('   ✅ Audio already exists and is valid');
@@ -495,6 +535,7 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
                         !validation.hasEntities || 
                         !validation.hasImages ||
                         !validation.hasAudio ||
+                        ['missing', 'error', 'empty', 'file_missing', 'incomplete'].includes(validation.audioStatus) ||
                         validation.emptyScenes.length > 0 ||
                         validation.entityErrors.length > 0 ||
                         validation.imageErrors.length > 0 ||
@@ -527,7 +568,7 @@ const processExistingStories = async ({ readStoriesFromDirectory, validateStoryC
       const { name: storyName, story, validation } = storyInfo;
       
       console.log(`\n📖 Processing: "${storyName}"`);
-      console.log(`   Missing - Scenes: ${!validation.hasValidScenes}, Entities: ${!validation.hasEntities}, Images: ${!validation.hasImages}, Audio: ${!validation.hasAudio}`);
+      console.log(`   Missing - Scenes: ${!validation.hasValidScenes}, Entities: ${!validation.hasEntities}, Images: ${!validation.hasImages}, Audio: ${!validation.hasAudio} (${validation.audioStatus})`);
       
       if (validation.emptyScenes.length > 0) {
         console.log(`   🚨 ${validation.emptyScenes.length} empty scenes need regeneration`);

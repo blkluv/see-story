@@ -10,6 +10,9 @@ ffmpeg.setFfmpegPath(ffmpegStatic);
 // This will generate silent audio files that match the story duration
 console.log('ℹ️  TTS module loaded - using placeholder implementation (Gemini TTS API not yet available)');
 
+// Enable test mode to generate actual audio (beeps) instead of silence
+const TEST_MODE = process.env.TTS_TEST_MODE === 'true';
+
 /**
  * Generate placeholder audio for a single scene (Gemini TTS placeholder)
  */
@@ -204,21 +207,143 @@ const audioToBase64 = async (audioPath) => {
 };
 
 /**
+ * Analyze audio file to check if it contains actual audio data
+ */
+const analyzeAudioContent = async (audioPath) => {
+  return new Promise((resolve, reject) => {
+    console.log(`🔍 Analyzing audio content: ${audioPath}`);
+    
+    ffmpeg(audioPath)
+      .audioFilters(['astats=metadata=1:reset=1'])
+      .format('null')
+      .output('-')
+      .on('stderr', (stderrLine) => {
+        // Parse ffmpeg audio statistics
+        if (stderrLine.includes('Mean_volume:')) {
+          const volumeMatch = stderrLine.match(/Mean_volume:\s*(-?\d+\.?\d*)/);
+          if (volumeMatch) {
+            const meanVolume = parseFloat(volumeMatch[1]);
+            console.log(`📊 Mean volume: ${meanVolume}dB`);
+          }
+        }
+        if (stderrLine.includes('RMS_level:')) {
+          const rmsMatch = stderrLine.match(/RMS_level:\s*(-?\d+\.?\d*)/);
+          if (rmsMatch) {
+            const rmsLevel = parseFloat(rmsMatch[1]);
+            console.log(`📊 RMS level: ${rmsLevel}dB`);
+          }
+        }
+      })
+      .on('end', () => {
+        console.log('✅ Audio analysis completed');
+        resolve({ analyzed: true });
+      })
+      .on('error', (err) => {
+        console.error('❌ Audio analysis failed:', err.message);
+        reject(err);
+      })
+      .run();
+  });
+};
+
+/**
+ * Generate test audio with beeps/tones for each scene
+ */
+const generateTestAudioWithBeeps = async (totalDurationSeconds, outputPath, sceneCount = 10) => {
+  return new Promise((resolve, reject) => {
+    console.log(`🎵 [TEST MODE] Generating test audio with beeps (${totalDurationSeconds}s, ${sceneCount} scenes)`);
+    
+    const sceneDuration = totalDurationSeconds / sceneCount; // seconds per scene
+    
+    // Create a simple test pattern: beep at start of each scene
+    ffmpeg()
+      .input('sine=frequency=440:duration=1') // 1-second beep
+      .inputFormat('lavfi')
+      .input(`sine=frequency=0:duration=${sceneDuration-1}`) // silence for rest of scene
+      .inputFormat('lavfi')
+      // Repeat this pattern for all scenes
+      .complexFilter([
+        // Generate beep + silence pattern and repeat
+        `[0:a][1:a]concat=n=2:v=0:a=1,aloop=loop=${sceneCount-1}:size=${Math.floor(sceneDuration * 44100)}[out]`
+      ])
+      .outputOptions(['-map', '[out]'])
+      .audioCodec('libmp3lame')
+      .audioBitrate('128k')
+      .duration(totalDurationSeconds)
+      .output(outputPath)
+      .on('start', (commandLine) => {
+        console.log('🎵 [TEST] FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`🔄 [TEST] Test audio progress: ${Math.round(progress.percent)}%`);
+        }
+      })
+      .on('end', () => {
+        console.log('✅ [TEST] Test audio with beeps generated successfully');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('❌ [TEST] Test audio generation failed, trying simpler approach...', err.message);
+        
+        // Fallback to simpler approach
+        ffmpeg()
+          .input('sine=frequency=440:duration=' + totalDurationSeconds)
+          .inputFormat('lavfi')
+          .audioCodec('libmp3lame')
+          .audioBitrate('128k')
+          .output(outputPath)
+          .on('end', () => {
+            console.log('✅ [TEST] Simple test tone generated');
+            resolve(outputPath);
+          })
+          .on('error', (fallbackErr) => {
+            console.error('❌ [TEST] Fallback test audio failed:', fallbackErr.message);
+            reject(fallbackErr);
+          })
+          .run();
+      })
+      .run();
+  });
+};
+
+/**
  * Generate a proper silent MP3 file using ffmpeg
  */
 const generateSilentAudio = async (durationSeconds, outputPath) => {
   return new Promise((resolve, reject) => {
+    console.log(`🔊 Generating ${durationSeconds}s silent MP3: ${outputPath}`);
+    
     ffmpeg()
       .input('anullsrc=channel_layout=stereo:sample_rate=44100')
       .inputFormat('lavfi')
       .audioCodec('libmp3lame')
       .audioBitrate('128k')
+      .audioChannels(2)
+      .audioFrequency(44100)
       .duration(durationSeconds)
       .output(outputPath)
+      .on('start', (commandLine) => {
+        console.log('🎵 FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        if (progress.percent) {
+          console.log(`🔄 Audio generation progress: ${Math.round(progress.percent)}%`);
+        }
+      })
       .on('end', () => {
-        resolve(outputPath);
+        // Check the generated file size
+        if (fs.existsSync(outputPath)) {
+          const stats = fs.statSync(outputPath);
+          const fileSizeKB = (stats.size / 1024).toFixed(1);
+          console.log(`✅ Generated silent audio: ${fileSizeKB}KB (${durationSeconds}s)`);
+          resolve(outputPath);
+        } else {
+          reject(new Error('Audio file was not created'));
+        }
       })
       .on('error', (err) => {
+        console.error('❌ FFmpeg error:', err.message);
         reject(err);
       })
       .run();
@@ -240,15 +365,47 @@ const generateCompleteStoryAudio = async (scenes, storyId) => {
     // Calculate total duration (60 seconds per scene for 10 minutes total)
     const totalDurationSeconds = scenes.length * 60; // 60 seconds per scene
     
-    console.log(`🔄 [PLACEHOLDER] Generating ${totalDurationSeconds}s of silent audio...`);
+    // Delete existing file if it exists (to ensure fresh generation)
+    if (fs.existsSync(outputPath)) {
+      console.log('🗑️ Removing existing audio file to regenerate...');
+      fs.unlinkSync(outputPath);
+    }
     
-    // Generate a silent MP3 file of the correct duration
-    await generateSilentAudio(totalDurationSeconds, outputPath);
+    // Generate either test audio or silent audio based on mode
+    if (TEST_MODE) {
+      console.log(`🔄 [TEST MODE] Generating ${totalDurationSeconds}s of test audio with scene beeps...`);
+      await generateTestAudioWithBeeps(totalDurationSeconds, outputPath, scenes.length);
+    } else {
+      console.log(`🔄 [PLACEHOLDER] Generating ${totalDurationSeconds}s of silent audio...`);
+      await generateSilentAudio(totalDurationSeconds, outputPath);
+    }
+    
+    // Verify the file was created and has reasonable size
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('Audio file was not created by ffmpeg');
+    }
+    
+    const stats = fs.statSync(outputPath);
+    const fileSizeKB = stats.size / 1024;
+    
+    if (fileSizeKB < 50) {
+      throw new Error(`Generated audio file too small: ${fileSizeKB.toFixed(1)}KB (expected >50KB for ${totalDurationSeconds}s)`);
+    }
+    
+    // Analyze the generated audio to verify it has content (if in test mode)
+    if (TEST_MODE) {
+      try {
+        await analyzeAudioContent(outputPath);
+      } catch (error) {
+        console.warn('⚠️ Audio analysis failed:', error.message);
+      }
+    }
     
     // Convert to base64 for JSON storage
     const audioBase64 = await audioToBase64(outputPath);
     
-    console.log(`🎉 [PLACEHOLDER] Story audio generation completed! (${totalDurationSeconds}s silent audio)`);
+    const audioType = TEST_MODE ? 'test audio with beeps' : 'silent audio';
+    console.log(`🎉 [${TEST_MODE ? 'TEST' : 'PLACEHOLDER'}] Story audio generation completed! (${fileSizeKB.toFixed(1)}KB, ${totalDurationSeconds}s ${audioType})`);
     
     return {
       audioBase64: audioBase64,
@@ -257,7 +414,9 @@ const generateCompleteStoryAudio = async (scenes, storyId) => {
       duration: totalDurationSeconds,
       segmentCount: scenes.length,
       totalScenes: scenes.length,
-      placeholder: true, // Mark as placeholder
+      fileSizeKB: fileSizeKB,
+      placeholder: !TEST_MODE, // Only mark as placeholder if not in test mode
+      testMode: TEST_MODE,
       generatedAt: new Date().toISOString()
     };
     
@@ -272,5 +431,6 @@ const generateCompleteStoryAudio = async (scenes, storyId) => {
 };
 
 module.exports = {
-  generateCompleteStoryAudio
+  generateCompleteStoryAudio,
+  analyzeAudioContent
 };
