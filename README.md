@@ -65,7 +65,7 @@ SeeStory transforms simple character outlines into rich, multimedia stories with
 
 SeeStory leverages multiple Google Gemini models for comprehensive multimedia story generation:
 
-**Image Generation**: The core visual content uses **Gemini 2.5 Flash Image Preview** for creating scene-specific images. This model excels at generating consistent character appearances using reference photos, creating cinematic scene compositions, and maintaining visual continuity across the 10-scene narrative structure.
+**Image Generation**: The core visual content uses **Gemini 2.5 Flash Image Preview (nano banana)** for creating scene-specific images. This model excels at generating consistent character appearances using reference photos, creating cinematic scene compositions, and maintaining visual continuity across the 10-scene narrative structure.
 
 **Text Generation**: Story creation and entity extraction utilize **Gemini 1.5 Flash** for rapid, coherent narrative generation. This model handles structured JSON output for stories, character development, and intelligent scene progression.
 
