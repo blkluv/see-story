@@ -61,6 +61,18 @@ SeeStory transforms simple character outlines into rich, multimedia stories with
 - **File-based audio concatenation** for seamless playback
 - **Automatic cleanup** of temporary files
 
+## 🤖 Gemini AI Integration
+
+SeeStory leverages multiple Google Gemini models for comprehensive multimedia story generation:
+
+**Image Generation**: The core visual content uses **Gemini 2.5 Flash Image Preview** for creating scene-specific images. This model excels at generating consistent character appearances using reference photos, creating cinematic scene compositions, and maintaining visual continuity across the 10-scene narrative structure.
+
+**Text Generation**: Story creation and entity extraction utilize **Gemini 1.5 Flash** for rapid, coherent narrative generation. This model handles structured JSON output for stories, character development, and intelligent scene progression.
+
+**Text-to-Speech**: Audio narration employs **Gemini 2.5 Pro Preview TTS** with the Enceladus voice model, producing natural, engaging speech synthesis that brings stories to life with professional-quality audio.
+
+The integration uses streaming responses for real-time processing, reference image conditioning for character consistency, and multi-modal prompting to ensure all generated content aligns with the story's narrative and visual themes.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
