@@ -2,26 +2,238 @@ const fs = require('fs');
 const path = require('path');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegStatic = require('ffmpeg-static');
+const { GoogleGenAI } = require('@google/genai');
+const mime = require('mime');
 
 // Set ffmpeg binary path
 ffmpeg.setFfmpegPath(ffmpegStatic);
 
-// For now, we'll implement TTS as a placeholder since Gemini TTS API might not be available yet
-// This will generate silent audio files that match the story duration
-console.log('ℹ️  TTS module loaded - using placeholder implementation (Gemini TTS API not yet available)');
+// Initialize Gemini AI client
+let geminiClient = null;
+try {
+  if (process.env.GEMINI_API_KEY) {
+    geminiClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+    });
+    console.log('✅ Gemini AI client initialized successfully');
+  } else {
+    console.warn('⚠️ GEMINI_API_KEY not found in environment variables');
+  }
+} catch (error) {
+  console.error('❌ Failed to initialize Gemini AI client:', error.message);
+  console.log('ℹ️  Falling back to placeholder mode');
+}
 
-// Enable test mode to generate actual audio (beeps) instead of silence
+// Configuration
 const TEST_MODE = process.env.TTS_TEST_MODE === 'true';
+const GEMINI_TTS_VOICE = process.env.GEMINI_TTS_VOICE || 'Enceladus';
+const GEMINI_TTS_MODEL = process.env.GEMINI_TTS_MODEL || 'gemini-2.5-pro-preview-tts';
+const GEMINI_TTS_TEMPERATURE = parseFloat(process.env.GEMINI_TTS_TEMPERATURE) || 1.0;
+
+console.log(`🎤 TTS module loaded - Mode: ${TEST_MODE ? 'Test (placeholder)' : 'Gemini TTS'}`);
+console.log(`🔊 Voice: ${GEMINI_TTS_VOICE}, Model: ${GEMINI_TTS_MODEL}`);
 
 /**
- * Generate placeholder audio for a single scene (Gemini TTS placeholder)
+ * Save binary audio file to filesystem
  */
-const generateSceneAudio = async (sceneContent, sceneTitle, sceneIndex) => {
+const saveBinaryFile = (fileName, content) => {
+  return new Promise((resolve, reject) => {
+    fs.writeFile(fileName, content, (err) => {
+      if (err) {
+        console.error(`❌ Error writing file ${fileName}:`, err);
+        reject(err);
+        return;
+      }
+      console.log(`💾 File ${fileName} saved to file system.`);
+      resolve(fileName);
+    });
+  });
+};
+
+/**
+ * Convert raw audio data to WAV format
+ */
+const convertToWav = (rawData, mimeType) => {
+  const options = parseMimeType(mimeType);
+  const buffer = Buffer.from(rawData, 'base64');
+  const wavHeader = createWavHeader(buffer.length, options);
+  return Buffer.concat([wavHeader, buffer]);
+};
+
+/**
+ * Parse MIME type to extract audio parameters
+ */
+const parseMimeType = (mimeType) => {
+  const [fileType, ...params] = mimeType.split(';').map(s => s.trim());
+  const [_, format] = fileType.split('/');
+
+  const options = {
+    numChannels: 1,
+    sampleRate: 24000,
+    bitsPerSample: 16
+  };
+
+  if (format && format.startsWith('L')) {
+    const bits = parseInt(format.slice(1), 10);
+    if (!isNaN(bits)) {
+      options.bitsPerSample = bits;
+    }
+  }
+
+  for (const param of params) {
+    const [key, value] = param.split('=').map(s => s.trim());
+    if (key === 'rate') {
+      options.sampleRate = parseInt(value, 10);
+    }
+  }
+
+  return options;
+};
+
+/**
+ * Create WAV header for audio data
+ */
+const createWavHeader = (dataLength, options) => {
+  const {
+    numChannels,
+    sampleRate,
+    bitsPerSample,
+  } = options;
+
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const buffer = Buffer.alloc(44);
+
+  buffer.write('RIFF', 0);                      // ChunkID
+  buffer.writeUInt32LE(36 + dataLength, 4);     // ChunkSize
+  buffer.write('WAVE', 8);                      // Format
+  buffer.write('fmt ', 12);                     // Subchunk1ID
+  buffer.writeUInt32LE(16, 16);                 // Subchunk1Size (PCM)
+  buffer.writeUInt16LE(1, 20);                  // AudioFormat (1 = PCM)
+  buffer.writeUInt16LE(numChannels, 22);        // NumChannels
+  buffer.writeUInt32LE(sampleRate, 24);         // SampleRate
+  buffer.writeUInt32LE(byteRate, 28);           // ByteRate
+  buffer.writeUInt16LE(blockAlign, 32);         // BlockAlign
+  buffer.writeUInt16LE(bitsPerSample, 34);      // BitsPerSample
+  buffer.write('data', 36);                     // Subchunk2ID
+  buffer.writeUInt32LE(dataLength, 40);         // Subchunk2Size
+
+  return buffer;
+};
+
+/**
+ * Generate audio using Gemini TTS for a single scene
+ */
+const generateSceneAudioWithGemini = async (sceneContent, sceneTitle, sceneIndex) => {
   try {
-    console.log(`🎤 [PLACEHOLDER] Generating TTS for Scene ${sceneIndex + 1}: "${sceneTitle}"`);
+    console.log(`🎤 [GEMINI TTS] Generating audio for Scene ${sceneIndex + 1}: "${sceneTitle}"`);
     
-    // Placeholder implementation - generate silent audio data
-    // In a real implementation, this would call Gemini TTS API
+    if (!geminiClient) {
+      throw new Error('Gemini AI client not initialized');
+    }
+    
+    // Clean up the text for better TTS
+    const cleanText = sceneContent
+      .replace(/\n+/g, ' ') // Replace newlines with spaces
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
+    
+    // Configure Gemini TTS request
+    const config = {
+      temperature: GEMINI_TTS_TEMPERATURE,
+      responseModalities: ['audio'],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: GEMINI_TTS_VOICE,
+          }
+        }
+      },
+    };
+
+    const contents = [{
+      role: 'user',
+      parts: [{
+        text: cleanText,
+      }],
+    }];
+
+    console.log(`🔄 Synthesizing speech for Scene ${sceneIndex + 1} (${cleanText.length} chars)...`);
+    
+    // Generate streaming response
+    const response = await geminiClient.models.generateContentStream({
+      model: GEMINI_TTS_MODEL,
+      config,
+      contents,
+    });
+
+    const audioChunks = [];
+    let totalSize = 0;
+    
+    for await (const chunk of response) {
+      if (!chunk.candidates || !chunk.candidates[0].content || !chunk.candidates[0].content.parts) {
+        continue;
+      }
+      
+      const inlineData = chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      if (inlineData) {
+        let buffer = Buffer.from(inlineData.data || '', 'base64');
+        let mimeType = inlineData.mimeType || '';
+        
+        // Convert to WAV if needed
+        let fileExtension = mime.default.getExtension(mimeType);
+        if (!fileExtension) {
+          fileExtension = 'wav';
+          buffer = convertToWav(inlineData.data || '', mimeType);
+        }
+        
+        audioChunks.push(buffer);
+        totalSize += buffer.length;
+      }
+    }
+
+    if (audioChunks.length === 0) {
+      throw new Error('No audio data received from Gemini TTS');
+    }
+
+    // Combine all audio chunks
+    const audioData = Buffer.concat(audioChunks);
+    
+    // Estimate duration (rough calculation based on file size and typical bitrates)
+    // For 16kHz, 16-bit mono audio: ~32KB per second
+    const estimatedDuration = Math.max(5, Math.round((audioData.length / 32000) * 100) / 100);
+
+    console.log(`✅ [GEMINI TTS] Generated audio for Scene ${sceneIndex + 1} (~${estimatedDuration}s, ${Math.round(audioData.length/1024)}KB)`);
+    
+    return {
+      audioData: audioData,
+      mimeType: 'audio/wav',
+      sceneIndex: sceneIndex,
+      sceneTitle: sceneTitle,
+      duration: estimatedDuration,
+      placeholder: false,
+      model: 'Gemini TTS',
+      voice: GEMINI_TTS_VOICE,
+      generatedAt: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error(`❌ Gemini TTS generation failed for Scene ${sceneIndex + 1}:`, error.message);
+    return {
+      error: error.message,
+      sceneIndex: sceneIndex,
+      sceneTitle: sceneTitle,
+      generatedAt: new Date().toISOString()
+    };
+  }
+};
+
+/**
+ * Generate placeholder audio for a single scene (fallback mode)
+ */
+const generateSceneAudioPlaceholder = async (sceneContent, sceneTitle, sceneIndex) => {
+  try {
+    console.log(`🎤 [PLACEHOLDER] Generating placeholder for Scene ${sceneIndex + 1}: "${sceneTitle}"`);
     
     // Calculate expected duration based on content length (roughly 150 words per minute)
     const wordCount = sceneContent.split(' ').length;
@@ -41,7 +253,7 @@ const generateSceneAudio = async (sceneContent, sceneTitle, sceneIndex) => {
       sceneIndex: sceneIndex,
       sceneTitle: sceneTitle,
       duration: estimatedDurationSeconds,
-      placeholder: true, // Mark as placeholder
+      placeholder: true,
       generatedAt: new Date().toISOString()
     };
 
@@ -57,10 +269,22 @@ const generateSceneAudio = async (sceneContent, sceneTitle, sceneIndex) => {
 };
 
 /**
- * Generate placeholder audio for all scenes in a story
+ * Generate audio for a single scene (uses Gemini TTS or falls back to placeholder)
+ */
+const generateSceneAudio = async (sceneContent, sceneTitle, sceneIndex) => {
+  if (TEST_MODE || !geminiClient) {
+    return await generateSceneAudioPlaceholder(sceneContent, sceneTitle, sceneIndex);
+  } else {
+    return await generateSceneAudioWithGemini(sceneContent, sceneTitle, sceneIndex);
+  }
+};
+
+/**
+ * Generate audio for all scenes in a story
  */
 const generateStoryAudio = async (scenes, storyId) => {
-  console.log(`🎙️ [PLACEHOLDER] Starting TTS generation for ${scenes.length} scenes...`);
+  const audioMode = TEST_MODE || !geminiClient ? 'PLACEHOLDER' : 'GEMINI TTS';
+  console.log(`🎙️ [${audioMode}] Starting TTS generation for ${scenes.length} scenes...`);
   
   const audioSegments = [];
   
@@ -69,14 +293,15 @@ const generateStoryAudio = async (scenes, storyId) => {
     const audioResult = await generateSceneAudio(scene.content, scene.title, i);
     audioSegments.push(audioResult);
     
-    // Small delay for simulation
+    // Delay between requests to avoid rate limiting
     if (i < scenes.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 100)); // Faster for placeholder
+      const delayMs = TEST_MODE ? 100 : 1000; // 1 second delay for Gemini TTS
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
   
   const successfulSegments = audioSegments.filter(a => !a.error).length;
-  console.log(`🎵 [PLACEHOLDER] Generated ${successfulSegments}/${scenes.length} placeholder audio segments`);
+  console.log(`🎵 [${audioMode}] Generated ${successfulSegments}/${scenes.length} audio segments`);
   return audioSegments;
 };
 
@@ -95,17 +320,20 @@ const saveAudioSegments = async (audioSegments, storyId) => {
       continue;
     }
     
-    const filename = `scene_${segment.sceneIndex.toString().padStart(2, '0')}.mp3`;
+    // Use .wav extension for Gemini TTS audio, .mp3 for placeholder
+    const extension = segment.mimeType.includes('wav') ? 'wav' : 'mp3';
+    const filename = `scene_${segment.sceneIndex.toString().padStart(2, '0')}.${extension}`;
     const filepath = path.join(tempDir, filename);
     
     await fs.promises.writeFile(filepath, Buffer.from(segment.audioData));
     audioFiles.push({
       filepath: filepath,
       sceneIndex: segment.sceneIndex,
-      sceneTitle: segment.sceneTitle
+      sceneTitle: segment.sceneTitle,
+      duration: segment.duration
     });
     
-    console.log(`💾 Saved audio segment: ${filename}`);
+    console.log(`💾 Saved audio segment: ${filename} (${segment.duration}s)`);
   }
   
   return audioFiles;
@@ -124,14 +352,21 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
     }
     
     if (audioFiles.length === 1) {
-      // If only one file, just copy it
-      fs.copyFile(audioFiles[0].filepath, outputPath, (err) => {
-        if (err) reject(err);
-        else {
-          console.log(`✅ Single audio file copied to: ${outputPath}`);
+      // If only one file, just copy it and ensure it's MP3
+      const inputPath = audioFiles[0].filepath;
+      ffmpeg(inputPath)
+        .audioCodec('libmp3lame')
+        .audioBitrate('128k')
+        .output(outputPath)
+        .on('end', () => {
+          console.log(`✅ Single audio file converted and copied to: ${outputPath}`);
           resolve(outputPath);
-        }
-      });
+        })
+        .on('error', (err) => {
+          console.error('❌ FFmpeg single file conversion error:', err.message);
+          reject(err);
+        })
+        .run();
       return;
     }
     
@@ -143,7 +378,7 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
       command.input(file.filepath);
     });
     
-    // Configure output
+    // Configure output with proper audio normalization
     command
       .outputOptions([
         '-filter_complex', 
@@ -152,6 +387,8 @@ const mergeAudioFiles = async (audioFiles, outputPath) => {
       ])
       .audioCodec('libmp3lame')
       .audioBitrate('128k')
+      .audioChannels(1) // Mono output
+      .audioFrequency(22050) // Consistent sample rate
       .output(outputPath)
       .on('start', (commandLine) => {
         console.log('🎵 FFmpeg started:', commandLine);
@@ -247,7 +484,7 @@ const analyzeAudioContent = async (audioPath) => {
 };
 
 /**
- * Generate test audio with beeps/tones for each scene
+ * Generate test audio with beeps/tones for each scene (fallback mode)
  */
 const generateTestAudioWithBeeps = async (totalDurationSeconds, outputPath, sceneCount = 10) => {
   return new Promise((resolve, reject) => {
@@ -308,62 +545,17 @@ const generateTestAudioWithBeeps = async (totalDurationSeconds, outputPath, scen
 };
 
 /**
- * Generate a proper silent MP3 file using ffmpeg
- */
-const generateSilentAudio = async (durationSeconds, outputPath) => {
-  return new Promise((resolve, reject) => {
-    console.log(`🔊 Generating ${durationSeconds}s silent MP3: ${outputPath}`);
-    
-    ffmpeg()
-      .input('anullsrc=channel_layout=stereo:sample_rate=44100')
-      .inputFormat('lavfi')
-      .audioCodec('libmp3lame')
-      .audioBitrate('128k')
-      .audioChannels(2)
-      .audioFrequency(44100)
-      .duration(durationSeconds)
-      .output(outputPath)
-      .on('start', (commandLine) => {
-        console.log('🎵 FFmpeg command:', commandLine);
-      })
-      .on('progress', (progress) => {
-        if (progress.percent) {
-          console.log(`🔄 Audio generation progress: ${Math.round(progress.percent)}%`);
-        }
-      })
-      .on('end', () => {
-        // Check the generated file size
-        if (fs.existsSync(outputPath)) {
-          const stats = fs.statSync(outputPath);
-          const fileSizeKB = (stats.size / 1024).toFixed(1);
-          console.log(`✅ Generated silent audio: ${fileSizeKB}KB (${durationSeconds}s)`);
-          resolve(outputPath);
-        } else {
-          reject(new Error('Audio file was not created'));
-        }
-      })
-      .on('error', (err) => {
-        console.error('❌ FFmpeg error:', err.message);
-        reject(err);
-      })
-      .run();
-  });
-};
-
-/**
- * Main function to generate complete story audio (placeholder version)
+ * Main function to generate complete story audio using individual scenes
  */
 const generateCompleteStoryAudio = async (scenes, storyId) => {
   try {
-    console.log(`🎬 [PLACEHOLDER] Starting complete audio generation for story: ${storyId}`);
+    const audioMode = TEST_MODE || !geminiClient ? 'PLACEHOLDER/TEST' : 'GEMINI TTS';
+    console.log(`🎬 [${audioMode}] Starting complete audio generation for story: ${storyId}`);
     
     // Create output directory and file path
     const outputDir = path.join(__dirname, '../audio_backend');
     await fs.promises.mkdir(outputDir, { recursive: true });
     const outputPath = path.join(outputDir, `story_${storyId}.mp3`);
-    
-    // Calculate total duration (60 seconds per scene for 10 minutes total)
-    const totalDurationSeconds = scenes.length * 60; // 60 seconds per scene
     
     // Delete existing file if it exists (to ensure fresh generation)
     if (fs.existsSync(outputPath)) {
@@ -371,57 +563,66 @@ const generateCompleteStoryAudio = async (scenes, storyId) => {
       fs.unlinkSync(outputPath);
     }
     
-    // Generate either test audio or silent audio based on mode
-    if (TEST_MODE) {
-      console.log(`🔄 [TEST MODE] Generating ${totalDurationSeconds}s of test audio with scene beeps...`);
-      await generateTestAudioWithBeeps(totalDurationSeconds, outputPath, scenes.length);
-    } else {
-      console.log(`🔄 [PLACEHOLDER] Generating ${totalDurationSeconds}s of silent audio...`);
-      await generateSilentAudio(totalDurationSeconds, outputPath);
+    // Generate audio for all scenes
+    const audioSegments = await generateStoryAudio(scenes, storyId);
+    
+    // Check if we have any successful segments
+    const successfulSegments = audioSegments.filter(a => !a.error);
+    if (successfulSegments.length === 0) {
+      throw new Error('No audio segments were generated successfully');
     }
+    
+    // Save audio segments to temporary files
+    const audioFiles = await saveAudioSegments(successfulSegments, storyId);
+    
+    if (audioFiles.length === 0) {
+      throw new Error('No audio files were saved successfully');
+    }
+    
+    // Merge all audio files into a single file
+    await mergeAudioFiles(audioFiles, outputPath);
+    
+    // Clean up temporary files
+    const tempDir = path.join(__dirname, '../audio_backend/temp', storyId);
+    await cleanupTempFiles(audioFiles, tempDir);
     
     // Verify the file was created and has reasonable size
     if (!fs.existsSync(outputPath)) {
-      throw new Error('Audio file was not created by ffmpeg');
+      throw new Error('Final audio file was not created');
     }
     
     const stats = fs.statSync(outputPath);
     const fileSizeKB = stats.size / 1024;
     
-    if (fileSizeKB < 50) {
-      throw new Error(`Generated audio file too small: ${fileSizeKB.toFixed(1)}KB (expected >50KB for ${totalDurationSeconds}s)`);
+    if (fileSizeKB < 10) {
+      throw new Error(`Generated audio file too small: ${fileSizeKB.toFixed(1)}KB`);
     }
     
-    // Analyze the generated audio to verify it has content (if in test mode)
-    if (TEST_MODE) {
-      try {
-        await analyzeAudioContent(outputPath);
-      } catch (error) {
-        console.warn('⚠️ Audio analysis failed:', error.message);
-      }
-    }
+    // Calculate total duration from segments
+    const totalDuration = successfulSegments.reduce((sum, segment) => sum + (segment.duration || 30), 0);
     
     // Convert to base64 for JSON storage
     const audioBase64 = await audioToBase64(outputPath);
     
-    const audioType = TEST_MODE ? 'test audio with beeps' : 'silent audio';
-    console.log(`🎉 [${TEST_MODE ? 'TEST' : 'PLACEHOLDER'}] Story audio generation completed! (${fileSizeKB.toFixed(1)}KB, ${totalDurationSeconds}s ${audioType})`);
+    console.log(`🎉 [${audioMode}] Story audio generation completed! (${fileSizeKB.toFixed(1)}KB, ${Math.round(totalDuration)}s)`);
     
     return {
       audioBase64: audioBase64,
       audioPath: outputPath,
       mimeType: 'audio/mpeg',
-      duration: totalDurationSeconds,
-      segmentCount: scenes.length,
+      duration: Math.round(totalDuration),
+      segmentCount: successfulSegments.length,
       totalScenes: scenes.length,
       fileSizeKB: fileSizeKB,
-      placeholder: !TEST_MODE, // Only mark as placeholder if not in test mode
+      placeholder: TEST_MODE || !geminiClient,
       testMode: TEST_MODE,
+      model: !TEST_MODE && geminiClient ? 'Gemini TTS' : 'Placeholder',
+      voice: !TEST_MODE && geminiClient ? GEMINI_TTS_VOICE : undefined,
       generatedAt: new Date().toISOString()
     };
     
   } catch (error) {
-    console.error('❌ [PLACEHOLDER] Complete story audio generation failed:', error.message);
+    console.error(`❌ Complete story audio generation failed:`, error.message);
     return {
       error: error.message,
       placeholder: true,
