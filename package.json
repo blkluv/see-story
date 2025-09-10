@@ -1,16 +1,17 @@
 {
-  "name": "see-story",
-  "version": "1.0.0",
-  "description": "Netflix-like interface for stories",
+  "name": "see-story-frontend",
+  "version": "0.0.0",
   "scripts": {
-    "install-all": "cd backend && npm install && cd ../frontend && npm install",
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "cd backend && npm run dev",
-    "dev:frontend": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build",
-    "start": "cd backend && npm start"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "vite": "^5.1.0",
+    "@vitejs/plugin-react": "^4.0.0"
   }
 }
